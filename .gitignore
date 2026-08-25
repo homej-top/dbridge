@@ -1,0 +1,53 @@
+# Binaries
+/server
+/db-sync-web-server
+*.exe
+
+# Data
+data/
+logs/
+
+# Config secrets
+configs/*.local.yaml
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go
+go.sum
+
+# Old Rust artifacts
+target/
+bugs/
+docs/images/
+vendor/
+dist/
+tests/
+export_files/
+.dbridge.pid
+.fuse_hidden*
+.dbridge.pid
+dbridge
+server-plain
+server-release
+db-sync-server
+cmd/server/__*
+web/node_modules/
+web/dist
+web-dist/
+exports/
+imports/
+.qoder-cn/
+.pi/
+.qoder/
+docs/
+test/
+export_logs
