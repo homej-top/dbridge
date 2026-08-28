@@ -1105,7 +1105,7 @@ const Compare: React.FC = () => {
                                     pagination={{
                                       current: sourcePage,
                                       pageSize: sourcePageSize,
-                                      total: sourceData.total,
+                                      total: sourceData.total_rows,
                                       onChange: handleSourcePageChange,
                                       size: 'small',
                                       showTotal: (total) => `${tr('common.total')} ${total} ${tr('common.rows')}`,
@@ -1133,7 +1133,7 @@ const Compare: React.FC = () => {
                                     pagination={{
                                       current: targetPage,
                                       pageSize: targetPageSize,
-                                      total: targetData.total,
+                                      total: targetData.total_rows,
                                       onChange: handleTargetPageChange,
                                       size: 'small',
                                       showTotal: (total) => `${tr('common.total')} ${total} ${tr('common.rows')}`,

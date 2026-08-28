@@ -103,7 +103,7 @@ export interface CompareObject {
 export interface TableDataResult {
   columns: string[];
   rows: any[][];
-  total: number;
+  total_rows: number;
   page: number;
   page_size: number;
 }
