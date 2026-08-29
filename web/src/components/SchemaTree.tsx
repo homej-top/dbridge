@@ -244,7 +244,7 @@ const SchemaTree: React.FC<SchemaTreeProps> = ({
       }
 
       const nodes: DataNode[] = names.map((name) => ({
-        title: onSchemaAction ? renderSchemaTitle(name, (levelInfo.key === 'user' ? 'user' : 'database')) : name,
+        title: onSchemaAction ? renderSchemaTitle(name, (levelInfo.key === 'user' ? 'user' : 'database'), levelInfo.key === 'user' ? undefined : name) : name,
         key: `${levelInfo.key}-${name}`,
         icon: resolveIcon(levelInfo.icon),
         isLeaf: !showTables && (m.db_type === 'mysql' || m.db_type === 'oracle'),

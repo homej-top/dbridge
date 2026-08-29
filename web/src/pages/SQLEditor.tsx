@@ -41,6 +41,7 @@ import type { DataNode } from 'antd/es/tree';
 import TableStructureDrawer from '../components/TableStructureDrawer';
 import CreateTableModal from '../components/CreateTableModal';
 import CreateViewModal from '../components/CreateViewModal';
+import SchemaFormModal from '../components/SchemaFormModal';
 import SchemaTree from '../components/SchemaTree';
 import { getDialect } from '../utils/dialect';
 
@@ -308,6 +309,8 @@ const SQLEditor: React.FC = () => {
   const [deleteConfirmName, setDeleteConfirmName] = useState('');
   const [queryCreateTable, setQueryCreateTable] = useState<{ open: boolean; schema: string; database?: string }>({ open: false, schema: '' });
   const [queryCreateView, setQueryCreateView] = useState<{ open: boolean; schema: string; database?: string }>({ open: false, schema: '' });
+  const [schemaForm, setSchemaForm] = useState<{ open: boolean; mode: 'create' | 'edit'; database?: string; initValues?: { name: string; charset: string; collation: string } }>({ open: false, mode: 'create' });
+  const [treeRefreshKey, setTreeRefreshKey] = useState(0);
 
   // Get DB type for the tree's current data source
   const treeDbType = useMemo(() => {
@@ -1533,6 +1536,7 @@ const SQLEditor: React.FC = () => {
             <SchemaTree
               dataSourceId={treeDS}
               selectedKey={undefined}
+              refreshTrigger={treeRefreshKey}
               onSelect={(_key, ctx) => {
                 if (ctx.database) setTreeDatabase(ctx.database);
                 if (ctx.schema) setTreeSchema(ctx.schema);
@@ -1574,6 +1578,10 @@ const SQLEditor: React.FC = () => {
                   setQueryCreateTable({ open: true, schema, database });
                 } else if (action === 'create-view') {
                   setQueryCreateView({ open: true, schema, database });
+                } else if (action === 'create-schema') {
+                  setSchemaForm({ open: true, mode: 'create', database });
+                } else if (action === 'edit-schema') {
+                  setSchemaForm({ open: true, mode: 'edit', database, initValues: { name: schema, charset: '', collation: '' } });
                 }
               }}
             />
@@ -1736,6 +1744,18 @@ const SQLEditor: React.FC = () => {
         database={queryCreateView.database}
         onClose={() => setQueryCreateView({ open: false, schema: '' })}
         onSuccess={() => { setQueryCreateView({ open: false, schema: '' }); }}
+      />
+
+      <SchemaFormModal
+        open={schemaForm.open}
+        mode={schemaForm.mode}
+        dataSourceId={treeDSRef.current}
+        dbType={treeDbType}
+        level="schema"
+        database={schemaForm.database}
+        initValues={schemaForm.initValues}
+        onClose={() => setSchemaForm({ open: false, mode: 'create' })}
+        onSuccess={() => { setSchemaForm({ open: false, mode: 'create' }); setTreeRefreshKey(k => k + 1); }}
       />
 
       {/* Delete Table/View Confirmation Modal */}
