@@ -3,32 +3,32 @@ import { useTranslation } from 'react-i18next';
 import { Table, Tag, Select, Tooltip, Space } from 'antd';
 import { auditAPI } from '../api';
 
-const operationTag = (_mod: string, op: string) => {
+const operationTag = (_mod: string, op: string, t: (key: string) => string) => {
   const map: Record<string, { color: string; label: string }> = {
-    user_login: { color: 'green', label: '登录' },
-    ds_create: { color: 'blue', label: '创建数据源' },
-    ds_update: { color: 'blue', label: '修改数据源' },
-    ds_delete: { color: 'red', label: '删除数据源' },
-    query_execute: { color: 'cyan', label: '查询' },
+    user_login: { color: 'green', label: t('audit.opUserLogin') },
+    ds_create: { color: 'blue', label: t('audit.opDsCreate') },
+    ds_update: { color: 'blue', label: t('audit.opDsUpdate') },
+    ds_delete: { color: 'red', label: t('audit.opDsDelete') },
+    query_execute: { color: 'cyan', label: t('audit.opQueryExecute') },
     ddl_execute: { color: 'purple', label: 'DDL' },
-    sync_start: { color: 'blue', label: '开始同步' },
-    sync_complete: { color: 'green', label: '同步完成' },
-    ai_chat: { color: 'magenta', label: 'AI 对话' },
-    ai_approve: { color: 'green', label: 'AI 审批通过' },
-    ai_reject: { color: 'orange', label: 'AI 审批拒绝' },
-    sync_structure: { color: 'blue', label: '结构同步' },
-    sync_data: { color: 'green', label: '数据同步' },
-    alter_table: { color: 'purple', label: '表结构变更' },
+    sync_start: { color: 'blue', label: t('audit.opSyncStart') },
+    sync_complete: { color: 'green', label: t('audit.opSyncComplete') },
+    ai_chat: { color: 'magenta', label: t('audit.opAiChat') },
+    ai_approve: { color: 'green', label: t('audit.opAiApprove') },
+    ai_reject: { color: 'orange', label: t('audit.opAiReject') },
+    sync_structure: { color: 'blue', label: t('audit.syncStructure') },
+    sync_data: { color: 'green', label: t('audit.syncData') },
+    alter_table: { color: 'purple', label: t('audit.alterTable') },
   };
   const info = map[op] || { color: 'default', label: op };
   return <Tag color={info.color}>{info.label}</Tag>;
 };
 
-const _summarizeAlter = (d: any) => {
+const _summarizeAlter = (d: any, t: (key: string, opts?: any) => string) => {
   const ds = d.data_source_name || d.data_source_id || '';
   const schema = d.schema ? `(${d.schema})` : '';
   const sub = Array.isArray(d.sub_actions) ? d.sub_actions.join(', ') : '';
-  const status = d.success ? '成功' : (d.error ? `失败: ${d.error}` : '');
+  const status = d.success ? t('audit.success') : (d.error ? t('audit.failedDetail', { error: d.error }) : '');
   return `${ds}${schema} · ${d.table || ''}${sub ? ` · ${sub}` : ''}${status ? ` · ${status}` : ''}`;
 };
 void _summarizeAlter;
@@ -52,17 +52,17 @@ const AuditLogs: React.FC = () => {
   const [filterModule, setFilterModule] = useState('');
   const [filterResult, setFilterResult] = useState('');
   const moduleOptions = useMemo(() => [
-    { label: '全部模块', value: '' },
-    { label: '系统', value: 'system' },
-    { label: '数据连接', value: 'datasource' },
-    { label: '数据操作', value: 'query' },
-    { label: '数据迁移', value: 'sync' },
-    { label: 'AI 中心', value: 'ai' },
-    { label: '安全', value: 'security' },
-    { label: '报表', value: 'report' },
-    { label: '导出', value: 'export' },
-    { label: '对比', value: 'compare' },
-  ], []);
+    { label: tr('audit.moduleAll'), value: '' },
+    { label: tr('audit.moduleSystem'), value: 'system' },
+    { label: tr('audit.moduleDatasource'), value: 'datasource' },
+    { label: tr('audit.moduleQuery'), value: 'query' },
+    { label: tr('audit.moduleSync'), value: 'sync' },
+    { label: tr('audit.moduleAi'), value: 'ai' },
+    { label: tr('audit.moduleSecurity'), value: 'security' },
+    { label: tr('audit.moduleReport'), value: 'report' },
+    { label: tr('audit.moduleExport'), value: 'export' },
+    { label: tr('audit.moduleCompare'), value: 'compare' },
+  ], [tr]);
 
   const fetchData = useCallback(async (p: number, ps: number, op: string, mod: string, res: string) => {
     setLoading(true);
@@ -96,24 +96,24 @@ const AuditLogs: React.FC = () => {
   void _handleOperationChange;
 
   const columns = [
-    { title: '模块', dataIndex: 'module', key: 'module', width: 90,
+    { title: tr('audit.moduleLabel'), dataIndex: 'module', key: 'module', width: 90,
       render: (v: string) => {
         const labels: Record<string, { color: string; label: string }> = {
-          system: { color: 'blue', label: '系统' },
-          datasource: { color: 'cyan', label: '数据源' },
-          query: { color: 'green', label: '查询' },
-          sync: { color: 'purple', label: '同步' },
+          system: { color: 'blue', label: tr('audit.moduleSystem') },
+          datasource: { color: 'cyan', label: tr('audit.moduleDatasource') },
+          query: { color: 'green', label: tr('audit.moduleQuery') },
+          sync: { color: 'purple', label: tr('audit.moduleSync') },
           ai: { color: 'magenta', label: 'AI' },
-          security: { color: 'red', label: '安全' },
-          report: { color: 'orange', label: '报表' },
-          export: { color: 'gold', label: '导出' },
-          compare: { color: 'geekblue', label: '对比' },
+          security: { color: 'red', label: tr('audit.moduleSecurity') },
+          report: { color: 'orange', label: tr('audit.moduleReport') },
+          export: { color: 'gold', label: tr('audit.moduleExport') },
+          compare: { color: 'geekblue', label: tr('audit.moduleCompare') },
         };
         const info = labels[v] || { color: 'default', label: v || '-' };
         return <Tag color={info.color}>{info.label}</Tag>;
       } },
-    { title: '操作', dataIndex: 'operation', key: 'operation', width: 110,
-      render: (op: string, r: any) => operationTag(r.module, op) },
+    { title: tr('common.actions'), dataIndex: 'operation', key: 'operation', width: 110,
+      render: (op: string, r: any) => operationTag(r.module, op, tr) },
     {
       title: tr('audit.detail'),
       dataIndex: 'details',
@@ -124,11 +124,11 @@ const AuditLogs: React.FC = () => {
         if (!d) return raw || '-';
         const parts: string[] = [];
         if (d.sql) parts.push(`SQL: ${typeof d.sql === 'string' ? d.sql.slice(0, 80) + (d.sql.length > 80 ? '...' : '') : ''}`);
-        if (d.target && d.target !== record.target_id) parts.push(`对象: ${d.target}`);
-        if (d.error) parts.push(`错误: ${d.error}`);
-        if (d.rows_affected != null) parts.push(`${d.rows_affected} 行`);
+        if (d.target && d.target !== record.target_id) parts.push(`${tr('audit.objectLabel')}: ${d.target}`);
+        if (d.error) parts.push(`${tr('audit.errorLabel')}: ${d.error}`);
+        if (d.rows_affected != null) parts.push(tr('audit.rowsAffected', { n: d.rows_affected }));
         if (d.duration) parts.push(`${d.duration}ms`);
-        if (d.ds_type) parts.push(`类型: ${d.ds_type}`);
+        if (d.ds_type) parts.push(`${tr('audit.typeLabel')}: ${d.ds_type}`);
         const summary = parts.join(' | ');
         return (
           <Tooltip title={raw} placement="topLeft">
@@ -139,11 +139,11 @@ const AuditLogs: React.FC = () => {
         );
       },
     },
-    { title: '结果', dataIndex: 'result', key: 'result', width: 80,
-      render: (v: string) => v === 'success' ? <Tag color="success">成功</Tag> : v === 'failure' ? <Tag color="error">失败</Tag> : '-' },
-    { title: '操作者', dataIndex: 'username', key: 'username', width: 100, ellipsis: true,
+    { title: tr('audit.resultLabel'), dataIndex: 'result', key: 'result', width: 80,
+      render: (v: string) => v === 'success' ? <Tag color="success">{tr('audit.resultSuccess')}</Tag> : v === 'failure' ? <Tag color="error">{tr('audit.resultFailure')}</Tag> : '-' },
+    { title: tr('audit.operator'), dataIndex: 'username', key: 'username', width: 100, ellipsis: true,
       render: (v: string, r: any) => v || r.user_id?.slice(0, 8) || '-' },
-    { title: '目标', dataIndex: 'target_name', key: 'target', width: 120, ellipsis: true,
+    { title: tr('audit.targetLabel'), dataIndex: 'target_name', key: 'target', width: 120, ellipsis: true,
       render: (v: string, r: any) => v || r.target_id?.slice(0, 8) || '-' },
     {
       title: 'IP',
@@ -174,9 +174,9 @@ const AuditLogs: React.FC = () => {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
         <h2 style={{ fontSize: 18, margin: 0 }}>{tr('nav.auditLogs')}</h2>
         <Space>
-          <Select style={{ width: 110 }} value={filterModule || undefined} onChange={v => { setFilterModule(v || ''); setPage(1); }} options={moduleOptions} placeholder="模块" />
+          <Select style={{ width: 110 }} value={filterModule || undefined} onChange={v => { setFilterModule(v || ''); setPage(1); }} options={moduleOptions} placeholder={tr('audit.moduleLabel')} />
           <Select style={{ width: 90 }} value={filterResult || undefined} onChange={v => { setFilterResult(v || ''); setPage(1); }}
-            options={[{ label: '全部结果', value: '' }, { label: '成功', value: 'success' }, { label: '失败', value: 'failure' }]} placeholder="结果" />
+            options={[{ label: tr('audit.resultAll'), value: '' }, { label: tr('audit.resultSuccess'), value: 'success' }, { label: tr('audit.resultFailure'), value: 'failure' }]} placeholder={tr('audit.resultLabel')} />
         </Space>
       </div>
       <Table

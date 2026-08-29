@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Form, Input, Button, Card, message } from 'antd';
 import { UserOutlined, LockOutlined, DatabaseOutlined } from '@ant-design/icons';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { authAPI } from '../api';
 import type { LoginResponse } from '../types';
 
@@ -9,15 +10,16 @@ const Login: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const { t } = useTranslation();
 
   const error = searchParams.get('error');
   useEffect(() => {
     if (error === 'missing_code') {
-      message.error('登录失败：缺少授权码');
+      message.error(t('login.failedMissingCode'));
     } else if (error === 'login_failed') {
-      message.error('登录失败，请重试');
+      message.error(t('login.failedRetry'));
     }
-  }, [error]);
+  }, [error, t]);
 
   const onFinish = async (values: { username: string; password: string }) => {
     setLoading(true);
@@ -26,7 +28,7 @@ const Login: React.FC = () => {
       const data = res.data.data as LoginResponse;
       localStorage.setItem('token', data.token);
       localStorage.setItem('user', JSON.stringify(data.user));
-      message.success('登录成功');
+      message.success(t('login.success'));
       navigate('/');
     } catch {
       // Error already handled by interceptor
@@ -58,31 +60,31 @@ const Login: React.FC = () => {
             style={{ fontSize: 48, color: '#20a53a', marginBottom: 12 }}
           />
           <h2 style={{ margin: 0, fontSize: 22, color: '#333' }}>
-            DBridge 数据库管理平台
+            {t('login.title')}
           </h2>
           <p style={{ color: '#999', marginTop: 8, fontSize: 13 }}>
-            安全、高效的数据同步管理工具
+            {t('login.subtitle')}
           </p>
         </div>
 
         <Form name="login" onFinish={onFinish} autoComplete="off" size="large">
             <Form.Item
               name="username"
-              rules={[{ required: true, message: '请输入用户名' }]}
+              rules={[{ required: true, message: t('login.requireUsername') }]}
             >
               <Input
                 prefix={<UserOutlined style={{ color: '#999' }} />}
-                placeholder="用户名"
+                placeholder={t('login.username')}
               />
             </Form.Item>
 
             <Form.Item
               name="password"
-              rules={[{ required: true, message: '请输入密码' }]}
+              rules={[{ required: true, message: t('login.requirePassword') }]}
             >
               <Input.Password
                 prefix={<LockOutlined style={{ color: '#999' }} />}
-                placeholder="密码"
+                placeholder={t('login.password')}
               />
             </Form.Item>
 
@@ -94,7 +96,7 @@ const Login: React.FC = () => {
                 block
                 style={{ height: 42 }}
               >
-                登录
+                {t('login.submit')}
               </Button>
             </Form.Item>
           </Form>

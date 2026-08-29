@@ -59,8 +59,8 @@ const Settings: React.FC = () => {
           'audit.retention.batch_size': String(retention.batchSize),
         }),
       });
-      message.success('审计保留策略已保存');
-    } catch { message.error('保存失败'); }
+      message.success(tr('audit.retentionSaved'));
+    } catch { message.error(tr('audit.saveFailed')); }
     finally { setSavingRetention(false); }
   };
 
@@ -72,33 +72,33 @@ const Settings: React.FC = () => {
         </div>
       </Spin>
 
-      <Card title="📋 审计日志保留策略" size="small" style={{ maxWidth: 700, marginTop: 16 }}>
+      <Card title={'📋 ' + tr('audit.retentionTitle')} size="small" style={{ maxWidth: 700, marginTop: 16 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
-              <div style={{ fontWeight: 500 }}>启用自动清理</div>
-              <div style={{ fontSize: 12, color: '#999' }}>定时删除超过保留天数的审计日志</div>
+              <div style={{ fontWeight: 500 }}>{tr('audit.enableAutoClean')}</div>
+              <div style={{ fontSize: 12, color: '#999' }}>{tr('audit.autoCleanDesc')}</div>
             </div>
             <Switch checked={retention.enabled} onChange={(v) => setRetention(prev => ({ ...prev, enabled: v }))} />
           </div>
           <div style={{ display: 'flex', gap: 16 }}>
             <div>
-              <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>保留天数（1-365）</div>
+              <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>{tr('audit.retentionDays')}</div>
               <InputNumber min={1} max={365} value={retention.days} disabled={!retention.enabled}
                 onChange={(v) => setRetention(prev => ({ ...prev, days: v || 90 }))} style={{ width: 120 }} />
             </div>
             <div>
-              <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>清理时间（cron）</div>
+              <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>{tr('audit.cleanTime')}</div>
               <Input placeholder="0 3 * * *" value={retention.cron} disabled={!retention.enabled}
                 onChange={(e) => setRetention(prev => ({ ...prev, cron: e.target.value }))} style={{ width: 130 }} />
             </div>
             <div>
-              <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>批量删除数（100-5000）</div>
+              <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>{tr('audit.batchDeleteSize')}</div>
               <InputNumber min={100} max={5000} value={retention.batchSize} disabled={!retention.enabled}
                 onChange={(v) => setRetention(prev => ({ ...prev, batchSize: v || 1000 }))} style={{ width: 120 }} />
             </div>
           </div>
-          <Button type="primary" loading={savingRetention} onClick={handleSaveRetention} style={{ alignSelf: 'flex-start' }}>保存</Button>
+          <Button type="primary" loading={savingRetention} onClick={handleSaveRetention} style={{ alignSelf: 'flex-start' }}>{tr('common.save')}</Button>
         </div>
       </Card>
     </div>

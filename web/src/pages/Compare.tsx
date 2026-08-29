@@ -653,12 +653,12 @@ const Compare: React.FC = () => {
           const gen = getDialect(tgtType);
           const ddl = gen.createViewDDL(tgtSchema, selectedObj, def, true);
           setEditableDDL(ddl);
-          setStructSyncResult({ ddl, success: true, message: '视图 DDL 预览' });
+          setStructSyncResult({ ddl, success: true, message: tr('compare.viewDDLPreview') });
         } else {
-          setEditableDDL('-- 未获取到视图定义');
+          setEditableDDL(tr('compare.noViewDef'));
         }
       } catch (err: any) {
-        setEditableDDL('-- 获取视图定义失败');
+        setEditableDDL(tr('compare.getViewDefFailed'));
       }
     } else if (selectedObjStatus === 'both') {
       // Table exists on both sides — generate ALTER DDL via backend
@@ -670,11 +670,11 @@ const Compare: React.FC = () => {
         });
         const result = res.data.data;
         setStructSyncResult(result);
-        setEditableDDL(result?.ddl || '-- 无差异');
+        setEditableDDL(result?.ddl || tr('compare.noDDLDash'));
       } catch (err: any) {
-        const msg = err?.response?.data?.message || err?.message || '获取结构失败';
+        const msg = err?.response?.data?.message || err?.message || tr('compare.getStructureFailed');
         message.error(msg);
-        setEditableDDL('-- 获取失败');
+        setEditableDDL(tr('compare.fetchError'));
       }
     } else {
       // Table only on source — use CREATE DDL
@@ -685,9 +685,9 @@ const Compare: React.FC = () => {
           ddl = ddl.replace(new RegExp(sourceSchema.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), targetSchema);
         }
         setEditableDDL(ddl);
-        setStructSyncResult({ ddl, success: true, message: 'DDL 预览' });
+        setStructSyncResult({ ddl, success: true, message: tr('compare.ddlPreview') });
       } else {
-        setEditableDDL('-- 未获取到 DDL');
+        setEditableDDL(tr('compare.noDDLFetch'));
       }
     }
     setStructSyncLoading(false);
@@ -704,12 +704,12 @@ const Compare: React.FC = () => {
         schema: targetSchema,
         database: targetDatabase || undefined,
       });
-      setStructSyncResult({ success: true, message: 'DDL 执行成功', ddl: editableDDL });
+      setStructSyncResult({ success: true, message: tr('compare.ddlExecSuccess'), ddl: editableDDL });
       message.success(tr('compare.syncStructureSuccess'));
       refreshAfterSync();
     } catch (err: any) {
       const msg = err?.response?.data?.message || err?.message || tr('compare.syncStructureFailed');
-      message.error(`结构同步失败: ${msg}`);
+      message.error(`${tr('compare.syncStructureFailedMsg')}: ${msg}`);
       setStructSyncResult({ success: false, message: msg, ddl: editableDDL });
     } finally {
       setStructSyncLoading(false);
@@ -719,7 +719,7 @@ const Compare: React.FC = () => {
   const handleOpenDataSyncModal = () => {
     const selObj = objects.find(o => o.name === selectedObj);
     if (selObj?.type === 'view') {
-      message.warning(tr('compare.viewDataSyncWarning') || '不能直接同步视图数据，请同步视图依赖的表中的数据');
+      message.warning(tr('compare.viewDataSyncWarning'));
       return;
     }
     setDataSyncModal(true);
@@ -771,11 +771,11 @@ const Compare: React.FC = () => {
           loadTableData(targetDS, targetSchema, selectedObj, 1, targetPageSize, 'target');
         }
       } else {
-        message.warning(`数据同步完成，但有 ${result.errors?.length || 0} 个错误`);
+        message.warning(tr('compare.dataSyncWithErrors', { count: result.errors?.length || 0 }));
       }
     } catch (err: any) {
-      const msg = err?.response?.data?.message || err?.message || '同步失败';
-      message.error(`数据同步失败: ${msg}`);
+      const msg = err?.response?.data?.message || err?.message || tr('compare.syncFailed');
+      message.error(`${tr('compare.dataSyncFailedMsg')}: ${msg}`);
       setDataSyncResult({ success: false, message: msg, total_rows: 0, synced_rows: 0, errors: [msg] } as any);
     } finally {
       setDataSyncLoading(false);
@@ -935,29 +935,29 @@ const Compare: React.FC = () => {
             image={false}
             description={
               <div style={{ textAlign: 'left', lineHeight: 2, fontSize: 14, color: '#666', maxWidth: 580, margin: '0 auto' }}>
-                <div style={{ fontSize: 18, fontWeight: 600, color: '#333', marginBottom: 12, textAlign: 'center' }}>数据库结构对比与同步</div>
-                <p>对比同步页面用于比较两个数据库之间的<b>表结构差异</b>和<b>数据差异</b>，并生成同步脚本。</p>
-                <p style={{ marginBottom: 4 }}><b>使用步骤：</b></p>
+                <div style={{ fontSize: 18, fontWeight: 600, color: '#333', marginBottom: 12, textAlign: 'center' }}>{tr('compare.guideTitle')}</div>
+                <p>{tr('compare.guideDesc')}</p>
+                <p style={{ marginBottom: 4 }}><b>{tr('compare.guideSteps')}</b></p>
                 <ol style={{ margin: '0 0 12px 0', paddingLeft: 20 }}>
-                  <li>选择源数据源和 Database / Schema</li>
-                  <li>选择目标数据源和 Database / Schema</li>
-                  <li>点击「开始对比」</li>
+                  <li>{tr('compare.guideStep1')}</li>
+                  <li>{tr('compare.guideStep2')}</li>
+                  <li>{tr('compare.guideStep3')}</li>
                 </ol>
-                <p style={{ marginBottom: 4 }}><b>✅ 支持的功能：</b></p>
+                <p style={{ marginBottom: 4 }}><b>{tr('compare.guideSupported')}</b></p>
                 <ul style={{ margin: '0 0 12px 0', paddingLeft: 20 }}>
-                  <li>对比和同步<b>同类型</b>数据库（如 MySQL ↔ MySQL、PostgreSQL ↔ PostgreSQL）</li>
-                  <li>对比<b>不同类型</b>数据库的<b>表结构</b>及<b>数据</b>（如 MySQL ↔ PostgreSQL）</li>
+                  <li>{tr('compare.guideSameType')}</li>
+                  <li>{tr('compare.guideDiffType')}</li>
                 </ul>
-                <p style={{ marginBottom: 4 }}><b>❌ 不支持：</b></p>
+                <p style={{ marginBottom: 4 }}><b>{tr('compare.guideNotSupport')}</b></p>
                 <ul style={{ margin: '0 0 12px 0', paddingLeft: 20 }}>
-                  <li><b>同步</b>不同类型数据库的表结构及数据（如将 MySQL 的表结构直接同步到 PostgreSQL）</li>
+                  <li>{tr('compare.guideNoSync')}</li>
                 </ul>
                 <p style={{ fontSize: 12, color: '#999', textAlign: 'center' }}>{tr('compare.supportedDBs')}</p>
               </div>
             }
           />
           {compareHistory.length > 0 && (
-            <Card title="最近对比" size="small" style={{ width: '100%', maxWidth: 900 }}>
+            <Card title={tr('compare.recentCompare')} size="small" style={{ width: '100%', maxWidth: 900 }}>
               <List
                 size="small"
                 dataSource={compareHistory.slice(0, 3)}
@@ -1078,7 +1078,7 @@ const Compare: React.FC = () => {
                         <Spin spinning={dataLoading}>
                           {selectedRowKeys.length > 0 && (
                             <Alert
-                              message={`已选择 ${selectedRowKeys.length} 行数据`}
+                              message={tr('compare.selectedRowsData', { count: selectedRowKeys.length })}
                               type="info"
                               showIcon
                               style={{ marginBottom: 8 }}
@@ -1162,7 +1162,7 @@ const Compare: React.FC = () => {
                           `}</style>
                           <Row gutter={8} style={{ overflow: 'hidden' }}>
                             <Col span={12} style={{ minWidth: 0 }}>
-                              <Card size="small" title={<span style={{ fontSize: 13 }}>源: {selectedObj} 字段结构</span>} style={{ overflow: 'hidden' }}>
+                              <Card size="small" title={<span style={{ fontSize: 13 }}>{tr('compare.sourceFieldStruct', { name: selectedObj })}</span>} style={{ overflow: 'hidden' }}>
                                 <Table
                                   columns={buildStructColumns('s')}
                                   dataSource={alignedStructRows}
@@ -1175,7 +1175,7 @@ const Compare: React.FC = () => {
                               </Card>
                             </Col>
                             <Col span={12} style={{ minWidth: 0 }}>
-                              <Card size="small" title={<span style={{ fontSize: 13 }}>目标: {selectedObj} 字段结构</span>} style={{ overflow: 'hidden' }}>
+                              <Card size="small" title={<span style={{ fontSize: 13 }}>{tr('compare.targetFieldStruct', { name: selectedObj })}</span>} style={{ overflow: 'hidden' }}>
                                 <Table
                                   columns={buildStructColumns('t')}
                                   dataSource={alignedStructRows}
@@ -1190,7 +1190,7 @@ const Compare: React.FC = () => {
                           </Row>
                           <Row gutter={8} style={{ marginTop: 16, overflow: 'hidden' }}>
                             <Col span={12} style={{ minWidth: 0 }}>
-                              <Card size="small" title={<div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><span style={{ fontSize: 13 }}>源建表语句</span>{sourceStruct?.ddl && <Button size="small" type="link" icon={<CopyOutlined />} onClick={() => { navigator.clipboard.writeText(sourceStruct!.ddl); message.success('已复制'); }}>复制</Button>}</div>} style={{ overflow: 'hidden' }}>
+                              <Card size="small" title={<div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><span style={{ fontSize: 13 }}>{tr('compare.sourceDDLLabel')}</span>{sourceStruct?.ddl && <Button size="small" type="link" icon={<CopyOutlined />} onClick={() => { navigator.clipboard.writeText(sourceStruct!.ddl); message.success(tr('query.copied')); }}>{tr('common.copy')}</Button>}</div>} style={{ overflow: 'hidden' }}>
                                 <pre
                                   style={{
                                     margin: 0,
@@ -1202,12 +1202,12 @@ const Compare: React.FC = () => {
                                     borderRadius: 4,
                                   }}
                                 >
-                                  {sourceStruct?.ddl || '-- 无'}
+                                  {sourceStruct?.ddl || tr('compare.noDataDash')}
                                 </pre>
                               </Card>
                             </Col>
                             <Col span={12} style={{ minWidth: 0 }}>
-                              <Card size="small" title={<div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><span style={{ fontSize: 13 }}>目标建表语句</span>{targetStruct?.ddl && <Button size="small" type="link" icon={<CopyOutlined />} onClick={() => { navigator.clipboard.writeText(targetStruct!.ddl); message.success('已复制'); }}>复制</Button>}</div>} style={{ overflow: 'hidden' }}>
+                              <Card size="small" title={<div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><span style={{ fontSize: 13 }}>{tr('compare.targetDDLLabel')}</span>{targetStruct?.ddl && <Button size="small" type="link" icon={<CopyOutlined />} onClick={() => { navigator.clipboard.writeText(targetStruct!.ddl); message.success(tr('query.copied')); }}>{tr('common.copy')}</Button>}</div>} style={{ overflow: 'hidden' }}>
                                 <pre
                                   style={{
                                     margin: 0,
@@ -1219,7 +1219,7 @@ const Compare: React.FC = () => {
                                     borderRadius: 4,
                                   }}
                                 >
-                                  {targetStruct?.ddl || '-- 无'}
+                                  {targetStruct?.ddl || tr('compare.noDataDash')}
                                 </pre>
                               </Card>
                             </Col>
@@ -1247,7 +1247,7 @@ const Compare: React.FC = () => {
           structSyncPhase === 'preview'
             ? [
                 <Button key="cancel" onClick={() => setStructSyncModal(false)}>
-                  取消
+                  {tr('compare.cancelBtn')}
                 </Button>,
                 <Button
                   key="confirm"
@@ -1256,12 +1256,12 @@ const Compare: React.FC = () => {
                   loading={structSyncLoading}
                   disabled={!editableDDL.trim()}
                 >
-                  确认执行
+                  {tr('compare.confirmExecute')}
                 </Button>,
               ]
             : [
                 <Button key="close" onClick={() => setStructSyncModal(false)}>
-                  关闭
+                  {tr('compare.closeBtn')}
                 </Button>,
               ]
         }
@@ -1278,7 +1278,7 @@ const Compare: React.FC = () => {
               />
               {structSyncPhase === 'preview' ? (
                 <>
-                  <Text strong>DDL 语句 (可直接编辑后执行):</Text>
+                  <Text strong>{tr('compare.ddlEditable')}</Text>
                   <Input.TextArea
                     value={editableDDL}
                     onChange={(e) => setEditableDDL(e.target.value)}
@@ -1292,7 +1292,7 @@ const Compare: React.FC = () => {
                 </>
               ) : (
                 <>
-                  <Text strong>执行的 DDL 语句:</Text>
+                  <Text strong>{tr('compare.ddlExecuted')}</Text>
                   <pre
                     style={{
                       marginTop: 8,
@@ -1314,7 +1314,7 @@ const Compare: React.FC = () => {
           ) : (
             <div style={{ textAlign: 'center', padding: 40 }}>
               <Spin />
-              <div style={{ marginTop: 8 }}>正在生成 DDL...</div>
+              <div style={{ marginTop: 8 }}>{tr('compare.generatingDDL')}</div>
             </div>
           )}
         </Spin>
@@ -1330,17 +1330,17 @@ const Compare: React.FC = () => {
         width={700}
       >
         <div style={{ marginBottom: 16 }}>
-          <Text strong>同步表: </Text>
+          <Text strong>{tr('compare.syncTable')} </Text>
           <Tag color="blue">{selectedObj}</Tag>
         </div>
 
         <div style={{ marginBottom: 12 }}>
           <Checkbox checked={syncTruncate} onChange={(e) => setSyncTruncate(e.target.checked)}>
-            清空目标表 (TRUNCATE)
+            {tr('compare.truncateTarget')}
           </Checkbox>
           {syncTruncate && (
             <Alert
-              message="警告: 将清空目标表全部数据后再写入"
+              message={tr('compare.truncateWarning')}
               type="warning"
               showIcon
               style={{ marginTop: 4 }}
@@ -1350,17 +1350,17 @@ const Compare: React.FC = () => {
 
         <div style={{ marginBottom: 12 }}>
           <Checkbox checked={syncID} onChange={(e) => setSyncID(e.target.checked)}>
-            同步 ID 字段 (包含自增主键)
+            {tr('compare.syncAutoInc')}
           </Checkbox>
         </div>
         <div style={{ marginBottom: 12 }}>
           <Checkbox checked={syncTransactional} onChange={(e) => setSyncTransactional(e.target.checked)}>
-            事务模式 (全部成功或全部回滚)
+            {tr('compare.transactionMode')}
           </Checkbox>
         </div>
 
         <div style={{ marginBottom: 12 }}>
-          <Text strong>同步模式:</Text>
+          <Text strong>{tr('compare.syncModeLabel')}</Text>
           <Radio.Group
             value={syncMode}
             onChange={(e) => setSyncMode(e.target.value)}
@@ -1368,7 +1368,7 @@ const Compare: React.FC = () => {
           >
             <Radio value="full">{tr('compare.fullSync')}</Radio>
             <Radio value="selected" disabled={selectedRows.length === 0}>
-              仅同步选中行 {selectedRows.length > 0 && `(${selectedRows.length} 行)`}
+              {tr('compare.syncSelectedRows')} {selectedRows.length > 0 && `(${selectedRows.length} ${tr('compare.nRows')})`}
             </Radio>
             <Radio value="diff">{tr('compare.diffSync')}</Radio>
           </Radio.Group>
@@ -1376,7 +1376,7 @@ const Compare: React.FC = () => {
 
         {syncMode === 'diff' && (
           <div style={{ marginBottom: 12 }}>
-            <Text strong>检查字段 (用于判断行是否相同):</Text>
+            <Text strong>{tr('compare.checkFields')}</Text>
             <Transfer
               dataSource={checkFieldTransferData}
               titles={[tr('compare.available'), tr('compare.selected')]}
@@ -1391,7 +1391,7 @@ const Compare: React.FC = () => {
 
         {(syncMode === 'diff' || syncMode === 'full') && (
           <div style={{ marginBottom: 12 }}>
-            <Text strong>同步指定列 (留空则同步全部列):</Text>
+            <Text strong>{tr('compare.syncColumns')}</Text>
             <Transfer
               dataSource={syncColTransferData}
               titles={[tr('compare.available'), tr('compare.selected')]}
@@ -1407,17 +1407,17 @@ const Compare: React.FC = () => {
         {dataSyncResult && (
           <div style={{ marginTop: 16 }}>
             <Alert
-              message={dataSyncResult.success ? '同步成功' : '同步完成，有错误'}
+              message={dataSyncResult.success ? tr('compare.syncSuccess') : tr('compare.syncWithErrors')}
               type={dataSyncResult.success ? 'success' : 'warning'}
               showIcon
               description={
                 <div>
-                  <div>总行数: {dataSyncResult.total_rows}</div>
-                  <div>已同步: {dataSyncResult.synced_rows}</div>
-                  <div>已跳过: {dataSyncResult.skipped_rows}</div>
+                  <div>{tr('compare.totalRowsLabel')}: {dataSyncResult.total_rows}</div>
+                  <div>{tr('compare.syncedRows')}: {dataSyncResult.synced_rows}</div>
+                  <div>{tr('compare.skippedRows')}: {dataSyncResult.skipped_rows}</div>
                   {dataSyncResult.errors?.length > 0 && (
                     <div style={{ color: '#ff4d4f', marginTop: 4 }}>
-                      错误: {dataSyncResult.errors.join(', ')}
+                      {tr('compare.errorsLabel')}: {dataSyncResult.errors.join(', ')}
                     </div>
                   )}
                 </div>

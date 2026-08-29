@@ -39,48 +39,48 @@ const MainLayout: React.FC = () => {
 
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const menuItems = useMemo(() => [
-    { key: '/', icon: <DashboardOutlined />, label: '仪表板' },
+    { key: '/', icon: <DashboardOutlined />, label: t('nav.dashboard') },
     { type: 'divider' as const },
     {
-      key: 'connect', icon: <LinkOutlined />, label: '数据连接',
+      key: 'connect', icon: <LinkOutlined />, label: t('nav.dataConnect'),
       children: [
-        { key: '/datasources', label: '数据源管理' },
+        { key: '/datasources', label: t('nav.datasourceManage') },
       ],
     },
     {
-      key: 'data-ops', icon: <SettingOutlined />, label: '数据操作',
+      key: 'data-ops', icon: <SettingOutlined />, label: t('nav.dataOps'),
       children: [
-        { key: '/query', label: 'SQL 查询' },
-        { key: '/compare', label: '对比同步' },
+        { key: '/query', label: t('nav.query') },
+        { key: '/compare', label: t('nav.compare') },
       ],
     },
     {
-      key: 'migrate', icon: <SyncOutlined />, label: '数据迁移',
+      key: 'migrate', icon: <SyncOutlined />, label: t('nav.migrate'),
       children: [
-        { key: '/sync', label: '同步任务' },
+        { key: '/sync', label: t('nav.syncTasks') },
       ],
     },
     { type: 'divider' as const },
     {
-      key: 'system', icon: <SettingOutlined />, label: '系统管理',
+      key: 'system', icon: <SettingOutlined />, label: t('nav.systemManage'),
       children: [
-        { key: '/audit', label: '审计日志' },
-        { key: '/settings', label: '系统设置' },
+        { key: '/audit', label: t('nav.auditLogs') },
+        { key: '/settings', label: t('nav.settings') },
       ],
     },
-  ], []);
+  ], [t]);
 
   const handleLogout = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
-    message.success('已退出登录');
+    message.success(t('common.logoutSuccess'));
     navigate('/login');
   };
 
   const handleChangePassword = async () => {
     const values = await pwdForm.validateFields();
     if (values.new_password !== values.confirm_password) {
-      message.error('两次输入的新密码不一致');
+      message.error(t('common.passwordMismatch'));
       return;
     }
     setSubmitting(true);
@@ -89,7 +89,7 @@ const MainLayout: React.FC = () => {
         old_password: values.old_password,
         new_password: values.new_password,
       });
-      message.success('密码修改成功，请重新登录');
+      message.success(t('common.passwordChangeSuccess'));
       setPwdModalOpen(false);
       pwdForm.resetFields();
       handleLogout();
@@ -190,7 +190,7 @@ const MainLayout: React.FC = () => {
               >
                 {user.username?.[0]?.toUpperCase() || 'U'}
               </Avatar>
-              <span style={{ color: '#333' }}>{user.username || '用户'}</span>
+              <span style={{ color: '#333' }}>{user.username || t('common.user')}</span>
             </Space>
           </Dropdown>
           </Space>

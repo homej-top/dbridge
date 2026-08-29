@@ -651,16 +651,6 @@ func (d *SQLiteDriver) CheckGuestStatus(database string) (*GuestStatus, error) {
 func (d *SQLiteDriver) DisableGuest(database string) error                     { return nil }
 
 // ─── Slow SQL stubs ─────────────────────────────────────────────────────
-func (d *SQLiteDriver) PreCheckSlowSQL(ctx context.Context) (*PreCheckResult, error) { return nil, nil }
-func (d *SQLiteDriver) FetchRealTimeSlowSQL(ctx context.Context, thresholdSec int) ([]SlowSQLRecord, error) {
-	return nil, nil
-}
-func (d *SQLiteDriver) FetchHistorySlowSQL(ctx context.Context, limit int) ([]SlowSQLRecord, error) {
-	return nil, nil
-}
-func (d *SQLiteDriver) FetchBlockingChain(ctx context.Context) ([]BlockingChain, error) {
-	return nil, nil
-}
 func (d *SQLiteDriver) KillSession(ctx context.Context, sessionID string) error { return nil }
 
 // ─── Indexes / Constraints ──────────────────────────────────────────────
@@ -669,12 +659,15 @@ func (d *SQLiteDriver) GetIndexes(schema, table string) ([]map[string]interface{
 		return nil, fmt.Errorf("not connected")
 	}
 	qtable := d.SQLQuoteIdent(table)
+	type idxEntry struct {
+		name   string
+		unique bool
+	}
+	var entries []idxEntry
 	idxRows, err := d.db.Query("PRAGMA index_list(" + qtable + ")")
 	if err != nil {
 		return nil, err
 	}
-	defer idxRows.Close()
-	var result []map[string]interface{}
 	for idxRows.Next() {
 		var seq int
 		var idxName string
@@ -686,7 +679,13 @@ func (d *SQLiteDriver) GetIndexes(schema, table string) ([]map[string]interface{
 		if strings.HasPrefix(idxName, "sqlite_autoindex_") {
 			continue
 		}
-		colRows, err := d.db.Query("PRAGMA index_info(" + d.SQLQuoteIdent(idxName) + ")")
+		entries = append(entries, idxEntry{name: idxName, unique: unique == 0})
+	}
+	idxRows.Close()
+
+	var result []map[string]interface{}
+	for _, e := range entries {
+		colRows, err := d.db.Query("PRAGMA index_info(" + d.SQLQuoteIdent(e.name) + ")")
 		if err != nil {
 			continue
 		}
@@ -697,8 +696,8 @@ func (d *SQLiteDriver) GetIndexes(schema, table string) ([]map[string]interface{
 				continue
 			}
 			result = append(result, map[string]interface{}{
-				"INDEX_NAME": idxName, "COLUMN_NAME": colName,
-				"NON_UNIQUE": unique == 0, "INDEX_TYPE": "BTREE",
+				"INDEX_NAME": e.name, "COLUMN_NAME": colName,
+				"NON_UNIQUE": e.unique, "INDEX_TYPE": "BTREE",
 			})
 		}
 		colRows.Close()
@@ -790,7 +789,6 @@ func (d *SQLiteDriver) GetFullStructure(schema, table string) (*FullStructure, e
 	if tableType == "view" {
 		result.IsView = true
 	}
-	result.DDL = ddl
 
 	// Columns
 	cols, err := d.GetColumns(schema, table)
@@ -811,9 +809,13 @@ func (d *SQLiteDriver) GetFullStructure(schema, table string) (*FullStructure, e
 
 	// Indexes (tables only)
 	if !result.IsView {
+		type idxEntry struct {
+			name   string
+			unique bool
+		}
+		var entries []idxEntry
 		idxRows, err := d.db.Query("PRAGMA index_list(" + d.SQLQuoteIdent(table) + ")")
 		if err == nil {
-			defer idxRows.Close()
 			for idxRows.Next() {
 				var seq int
 				var idxName string
@@ -822,38 +824,86 @@ func (d *SQLiteDriver) GetFullStructure(schema, table string) (*FullStructure, e
 				if err := idxRows.Scan(&seq, &idxName, &unique, &origin, &partial); err != nil {
 					continue
 				}
-				// Skip auto-created indexes for PRIMARY KEY and UNIQUE constraints
 				if strings.HasPrefix(idxName, "sqlite_autoindex_") {
 					continue
 				}
-				idx := TableIndex{
-					Name: idxName,
-					Type: "BTREE", // SQLite default
-				}
-				if unique == 1 {
-					idx.Type = "UNIQUE"
-				}
-				// Get index columns
-				colRows, err := d.db.Query("PRAGMA index_info(" + d.SQLQuoteIdent(idxName) + ")")
-				if err == nil {
-					for colRows.Next() {
-						var colSeq int
-						var colName string
-						var colIdx int
-						if err := colRows.Scan(&colSeq, &colName, &colIdx); err != nil {
-							continue
-						}
-						idx.Columns = append(idx.Columns, colName)
-					}
-					colRows.Close()
-				}
-				result.Indexes = append(result.Indexes, idx)
+				entries = append(entries, idxEntry{name: idxName, unique: unique == 1})
 			}
+			idxRows.Close()
 		}
+		for _, e := range entries {
+			idx := TableIndex{
+				Name: e.name,
+				Type: "BTREE",
+			}
+			if e.unique {
+				idx.Type = "UNIQUE"
+			}
+			colRows, err := d.db.Query("PRAGMA index_info(" + d.SQLQuoteIdent(e.name) + ")")
+			if err == nil {
+				for colRows.Next() {
+					var colSeq int
+					var colName string
+					var colIdx int
+					if err := colRows.Scan(&colSeq, &colName, &colIdx); err != nil {
+						continue
+					}
+					idx.Columns = append(idx.Columns, colName)
+				}
+				colRows.Close()
+			}
+			result.Indexes = append(result.Indexes, idx)
+		}
+	}
+
+	if result.IsView {
+		result.DDL = ddl
+	} else {
+		result.DDL = buildSQLiteDDL(table, result)
 	}
 
 	return result, nil
 }
+
+func buildSQLiteDDL(table string, st *FullStructure) string {
+	q := func(s string) string { return `"` + s + `"` }
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("CREATE TABLE %s (\n", q(table)))
+	for i, c := range st.Columns {
+		b.WriteString("    " + q(c.Name) + " " + c.Type)
+		if !c.Nullable {
+			b.WriteString(" NOT NULL")
+		}
+		if c.HasDef && c.Default != "" {
+			b.WriteString(" DEFAULT " + c.Default)
+		}
+		if c.Key == "PRI" {
+			b.WriteString(" PRIMARY KEY")
+		}
+		if i < len(st.Columns)-1 || len(st.Indexes) > 0 {
+			b.WriteString(",")
+		}
+		b.WriteString("\n")
+	}
+	for i, idx := range st.Indexes {
+		unique := ""
+		if idx.Type == "UNIQUE" {
+			unique = "UNIQUE "
+		}
+		cols := make([]string, len(idx.Columns))
+		for j, c := range idx.Columns {
+			cols[j] = q(c)
+		}
+		b.WriteString(fmt.Sprintf("    CREATE %sINDEX %s ON %s (%s)", unique, q(idx.Name), q(table), strings.Join(cols, ", ")))
+		if i < len(st.Indexes)-1 {
+			b.WriteString(",")
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString(");")
+	return b.String()
+}
+
 func (d *SQLiteDriver) ListColumnsForAlter(schema, table string) ([]AlterColumn, error) {
 	if d.db == nil {
 		return nil, fmt.Errorf("not connected")
@@ -922,9 +972,9 @@ func (d *SQLiteDriver) FormatSQLValue(val interface{}) string {
 	}
 	switch v := val.(type) {
 	case string:
-		return QuoteStringValue(v, "sqlite")
+		return "'" + strings.ReplaceAll(v, "'", "''") + "'"
 	case []byte:
-		return FormatSQLBytes(v, "sqlite")
+		return FormatSQLBytes(v)
 	case bool:
 		if v {
 			return "1"
@@ -955,9 +1005,9 @@ func (d *SQLiteDriver) FormatSQLValue(val interface{}) string {
 	case float64:
 		return fmt.Sprintf("%g", v)
 	case time.Time:
-		return QuoteStringValue(v.Format("2006-01-02 15:04:05"), "sqlite")
+		return "'" + v.Format("2006-01-02 15:04:05") + "'"
 	default:
-		return QuoteStringValue(fmt.Sprintf("%v", v), "sqlite")
+		return "'" + strings.ReplaceAll(fmt.Sprintf("%v", v), "'", "''") + "'"
 	}
 }
 func (d *SQLiteDriver) AlterColumnClause(columnName, colType, columnDef string) string { return "" }

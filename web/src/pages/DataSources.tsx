@@ -229,11 +229,11 @@ const DataSources: React.FC = () => {
       const result = res.data.data;
       setImportResult(result);
       if (result.success > 0) {
-        message.success(`成功导入 ${result.success} 条数据源`);
+        message.success(tr('datasource.importSuccessMsg', { n: result.success }));
         fetchData();
       }
       if (result.errors?.length > 0) {
-        message.warning(`${result.errors.length} 条导入失败`);
+        message.warning(tr('datasource.importFailMsg', { n: result.errors.length }));
       }
     } catch (err: any) {
       message.error(err?.response?.data?.message || tr('datasource.importFailed'));
@@ -270,17 +270,17 @@ const DataSources: React.FC = () => {
         return <Tag color={colors[type] || 'default'}>{type.toUpperCase()}</Tag>;
       },
     },
-    { title: '主机:端口', key: 'address', width: 200, render: (_: any, r: DataSource) => `${r.host}:${r.port}` },
+    { title: tr('datasource.hostPort'), key: 'address', width: 200, render: (_: any, r: DataSource) => `${r.host}:${r.port}` },
     { title: tr('datasource.tableDatabase'), dataIndex: 'database', key: 'database' },
-    { title: '用户名', dataIndex: 'username', key: 'username', width: 130 },
-    { title: '环境', dataIndex: 'env', key: 'env', width: 80,
+    { title: tr('datasource.usernameCol'), dataIndex: 'username', key: 'username', width: 130 },
+    { title: tr('datasource.envCol'), dataIndex: 'env', key: 'env', width: 80,
       render: (v: string) => {
-        const envMap: Record<string, { color: string; label: string }> = { dev: { color: 'green', label: '开发' }, test: { color: 'orange', label: '测试' }, prod: { color: 'red', label: '生产' } };
+        const envMap: Record<string, { color: string; label: string }> = { dev: { color: 'green', label: tr('datasource.envDev') }, test: { color: 'orange', label: tr('datasource.envTest') }, prod: { color: 'red', label: tr('datasource.envProd') } };
         const e = envMap[v] || { color: 'default', label: v || 'dev' };
         return <Tag color={e.color}>{e.label}</Tag>;
       }},
-    { title: '功能标签', dataIndex: 'tags', key: 'tags', width: 180,
-      render: (v: string) => v ? v.split(',').map((t: string) => <Tag key={t} style={{ marginBottom: 2 }}>{t === 'data_query' ? '数据查询' : t}</Tag>) : <span style={{ color: '#ccc' }}>-</span> },
+    { title: tr('datasource.tagsCol'), dataIndex: 'tags', key: 'tags', width: 180,
+      render: (v: string) => v ? v.split(',').map((tag: string) => <Tag key={tag} style={{ marginBottom: 2 }}>{tag === 'data_query' ? tr('datasource.tagDataQuery') : tag}</Tag>) : <span style={{ color: '#ccc' }}>-</span> },
     {
       title: tr('datasource.tableAction'),
       key: 'action',
@@ -422,17 +422,17 @@ const DataSources: React.FC = () => {
           >
             <Input placeholder={tr('datasource.databasePlaceholder')} />
           </Form.Item>
-          <Form.Item name="tags" label="功能标签" tooltip="选择数据源在哪些功能页面中可用">
-            <Select mode="multiple" placeholder="选择功能标签（可多选，不选则不出现在任何功能页）"
+          <Form.Item name="tags" label={tr('datasource.tagsLabel')} tooltip={tr('datasource.tagsTooltip')}>
+            <Select mode="multiple" placeholder={tr('datasource.tagsPlaceholder')}
               options={[
-                { label: '数据查询（SQL 编辑器）', value: 'data_query' },
+                { label: tr('datasource.tagDataQueryFull'), value: 'data_query' },
               ]} />
           </Form.Item>
-          <Form.Item name="env" label="环境" tooltip="dev=开发宽松，prod=生产严格" initialValue="dev">
+          <Form.Item name="env" label={tr('datasource.envLabel')} tooltip={tr('datasource.envTooltip')} initialValue="dev">
             <Select options={[
-              { label: '🟢 开发 (dev)', value: 'dev' },
-              { label: '🟡 测试 (test)', value: 'test' },
-              { label: '🔴 生产 (prod)', value: 'prod' },
+              { label: '🟢 ' + tr('datasource.envDevOption'), value: 'dev' },
+              { label: '🟡 ' + tr('datasource.envTestOption'), value: 'test' },
+              { label: '🔴 ' + tr('datasource.envProdOption'), value: 'prod' },
             ]} />
           </Form.Item>
           <Form.Item noStyle shouldUpdate>
@@ -497,9 +497,9 @@ const DataSources: React.FC = () => {
                 </>
               ) : getFieldValue('type') === 'sqlite' ? (
                 <>
-                  <Form.Item name="host" label="数据库文件路径"
-                    tooltip="输入 .db 文件路径或通过上方上传按钮上传"
-                    rules={[{ required: true, message: '请输入文件路径或上传文件' }]}>
+                  <Form.Item name="host" label={tr('datasource.dbFilePath')}
+                    tooltip={tr('datasource.dbFileTooltip')}
+                    rules={[{ required: true, message: tr('datasource.dbFileRequired') }]}>
                     <Input placeholder="/data/sqlite/mydb.db" />
                   </Form.Item>
                 </>

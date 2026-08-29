@@ -167,7 +167,7 @@ const SQLEditor: React.FC = () => {
       const schema = tab.schema || currentSchema || '';
       // Only include non-empty values; PK left empty = DB auto-increment/default
       const filledKeys = Object.keys(values).filter(k => values[k] !== undefined && values[k] !== '' && values[k] !== null);
-      if (filledKeys.length === 0) { message.warning('请至少填写一个字段'); return; }
+      if (filledKeys.length === 0) { message.warning(tr('query.fillAtLeastOneField')); return; }
       const valuesObj: Record<string, any> = {};
       const colTypes: Record<string, string> = {};
       for (const k of filledKeys) {
@@ -187,9 +187,9 @@ const SQLEditor: React.FC = () => {
 
   // Delete single row
   const handleDeleteRow = async (record: Record<string, any>, pkCol: string, tab: any) => {
-    if (!pkCol) { message.warning('该表无主键，无法删除'); return; }
+    if (!pkCol) { message.warning(tr('query.noPKDelete')); return; }
     const pkVal = record[pkCol];
-    if (pkVal == null) { message.warning('主键值为空，无法删除'); return; }
+    if (pkVal == null) { message.warning(tr('query.pkValueEmpty')); return; }
     const t = tab as any;
     const ds = tab.dsId || treeDSRef.current;
     const dsInfo = dataSources.find(d => d.id === ds);
@@ -209,14 +209,14 @@ const SQLEditor: React.FC = () => {
 
   // Batch delete
   const handleBatchDelete = async () => {
-    if (selectedRows.length === 0) { message.warning('请选择要删除的行'); return; }
+    if (selectedRows.length === 0) { message.warning(tr('query.selectRowsDelete')); return; }
     // Find the active table tab to get schema/table info
     const activeTableTab = tabs.find(t => t.type === 'table') as any;
-    if (!activeTableTab) { message.warning('无法确定当前表'); return; }
+    if (!activeTableTab) { message.warning(tr('query.cannotDetermineTable')); return; }
     const ds = activeTableTab?.dsId || treeDSRef.current;
     const key = `${ds}:${activeTableTab.schema || ''}:${activeTableTab.table || ''}`;
     const pkCol = tablePKMap[key] || rowAdd.pkColumn;
-    if (!pkCol) { message.warning('无法确定主键'); return; }
+    if (!pkCol) { message.warning(tr('query.cannotDeterminePK')); return; }
     const t = activeTableTab;
     const dsInfo = dataSources.find(d => d.id === ds);
     const tabDbType = dsInfo?.type || dbType;
@@ -386,7 +386,7 @@ const SQLEditor: React.FC = () => {
     const dsFromUrl = searchParams.get('ds');
     if (!dsFromUrl || dataSources.length === 0) return;
     const exists = dataSources.some((ds) => ds.id === dsFromUrl);
-    if (!exists) { message.warning(`数据源 ${dsFromUrl} 不存在`); searchParams.delete('ds'); setSearchParams(searchParams, { replace: true }); return; }
+    if (!exists) { message.warning(tr('query.dsNotExist', { ds: dsFromUrl })); searchParams.delete('ds'); setSearchParams(searchParams, { replace: true }); return; }
 
     treeDSRef.current = dsFromUrl;
     setTreeDS(dsFromUrl);
@@ -838,18 +838,18 @@ const SQLEditor: React.FC = () => {
       const res = await dsAPI.getDdl(treeDSRef.current, schema, table);
       ddl = res.data.data?.ddl || '';
     } catch {
-      message.error('获取建表语句失败');
+      message.error(tr('query.getDDLFailed'));
       return;
     }
     if (!ddl) {
-      message.warning('未获取到建表语句');
+      message.warning(tr('query.noDDLFound'));
       return;
     }
     try {
       await navigator.clipboard.writeText(ddl);
-      message.success('建表语句已复制到剪贴板');
+      message.success(tr('query.ddlCopied'));
     } catch {
-      // Clipboard API 在非安全上下文中不可用,尝试 fallback
+      // Clipboard API not available in non-secure context, try fallback
       const textarea = document.createElement('textarea');
       textarea.value = ddl;
       textarea.style.position = 'fixed';
@@ -858,9 +858,9 @@ const SQLEditor: React.FC = () => {
       textarea.select();
       try {
         document.execCommand('copy');
-        message.success('建表语句已复制到剪贴板');
+        message.success(tr('query.ddlCopied'));
       } catch {
-        message.error('复制失败,请手动复制');
+        message.error(tr('query.copyFailed'));
       }
       document.body.removeChild(textarea);
     }
@@ -878,7 +878,7 @@ const SQLEditor: React.FC = () => {
       { key: 'copy-ddl', label: tr('query.copyDdl') },
       { key: 'export', label: tr('query.exportTable') },
       { type: 'divider' as const },
-      { key: 'delete', label: `删除${isView ? '视图' : '表'}`, danger: true },
+      { key: 'delete', label: tr('query.deleteViewOrTable', { type: isView ? tr('query.viewLabel') : tr('query.tableLabel') }), danger: true },
     ],
     onClick: ({ key }: { key: string }) => {
       if (key === 'structure') {
@@ -909,7 +909,7 @@ const SQLEditor: React.FC = () => {
 
   // --- Structure drawer ---
   const openStructureDrawer = (schema: string, table: string, isView: boolean, database?: string) => {
-    if (!treeDSRef.current) { message.warning('请先选择数据源'); return; }
+    if (!treeDSRef.current) { message.warning(tr('query.selectDSFirst')); return; }
     setDrawerTarget({ schema, table, isView, database }); setDrawerOpen(true);
   };
 
@@ -918,8 +918,8 @@ const SQLEditor: React.FC = () => {
     setViewDefLoading(true); setViewDef({ name: viewName, definition: '-- loading...' }); setViewDefOpen(true);
     try {
       const res = await viewAPI.definition({ data_source_id: treeDSRef.current, schema: schema || undefined, view: viewName, database: database || undefined });
-      setViewDef({ name: viewName, definition: res.data.data?.definition || '-- 无定义' });
-    } catch { setViewDef({ name: viewName, definition: '-- 获取失败' }); }
+      setViewDef({ name: viewName, definition: res.data.data?.definition || tr('query.noDefinition') });
+    } catch { setViewDef({ name: viewName, definition: tr('query.fetchFailed') }); }
     finally { setViewDefLoading(false); }
   };
 
@@ -976,7 +976,7 @@ const SQLEditor: React.FC = () => {
               { key: 'filter', label: (
                 <Input
                   size="small"
-                  placeholder="过滤值..."
+                  placeholder={tr('query.filterPlaceholderShort')}
                   value={(tab as TableTab).columnFilters?.[col] || ''}
                   onChange={(e) => {
                     const t = tab as TableTab;
@@ -1082,7 +1082,7 @@ const SQLEditor: React.FC = () => {
               if (!pk) { message.warning(tr('query.noPK')); return; }
               handleDeleteRow(record, pk, tab);
             }}>
-              <Button type="link" size="small" danger>删除</Button>
+              <Button type="link" size="small" danger>{tr('query.delete')}</Button>
             </Popconfirm>
           )}
         </Space>
@@ -1123,9 +1123,9 @@ const SQLEditor: React.FC = () => {
               };
             })}
             columns={[
-              { title: '列名', dataIndex: 'name', key: 'name', width: 150, ellipsis: { showTitle: true } },
+              { title: tr('query.columnName'), dataIndex: 'name', key: 'name', width: 150, ellipsis: { showTitle: true } },
               {
-                title: '值', dataIndex: 'value', key: 'value',
+                title: tr('query.value'), dataIndex: 'value', key: 'value',
                 render: (val: string | null) =>
                   val != null ? (
                     <div style={{ wordBreak: 'break-all', whiteSpace: 'pre-wrap' }}>{val}</div>
@@ -1134,7 +1134,7 @@ const SQLEditor: React.FC = () => {
                   ),
               },
               {
-                title: '字段信息', dataIndex: 'meta', key: 'meta', width: 280,
+                title: tr('query.fieldInfo'), dataIndex: 'meta', key: 'meta', width: 280,
                 render: (m: string) => (
                   <span style={{ fontSize: 12, color: '#666', wordBreak: 'break-all', whiteSpace: 'pre-wrap' }}>{m}</span>
                 ),
@@ -1199,7 +1199,7 @@ const SQLEditor: React.FC = () => {
               const whereParts = rowEdit.columns.map((col) => `${gen.quoteIdent(col)} = ${gen.formatValue(String(rowEdit.data![col] ?? ''), columnMeta[col]?.type)}`).join(' AND ');
               const sql = `UPDATE ? SET ${setParts} WHERE ${whereParts};`;
               await navigator.clipboard.writeText(sql);
-              message.info('SQL 已复制到剪贴板，请手动执行');
+              message.info(tr('query.sqlCopiedManual'));
               setRowEdit({ open: false, data: null, columns: [], tab: null });
             }
           } catch (err: any) {
@@ -1238,7 +1238,7 @@ const SQLEditor: React.FC = () => {
               : col;
             return (
             <Form.Item key={col} name={col} label={<span style={{ fontSize: 14, fontWeight: 500 }}>{label}</span>}>
-              <Input placeholder={col === rowAdd.pkColumn ? '主键 (留空跳过)' : ''} />
+              <Input placeholder={col === rowAdd.pkColumn ? tr('query.pkSkip') : ''} />
             </Form.Item>
             );
           })}
@@ -1323,14 +1323,16 @@ const SQLEditor: React.FC = () => {
               dsAPI.tableList(s.dsId, s.schema, s.database).then((res: any) => {
                 updateTab(tab.id, { items: res.data?.data || [], totalItems: (res.data?.data || []).length, loading: false });
               }).catch(() => updateTab(tab.id, { loading: false }));
-            }}>刷新</Button>
+            }}>
+              {tr('query.refreshBtn')}
+            </Button>
             <Button size="small" type="primary" icon={<PlusOutlined />}
               onClick={() => setQueryCreateTable({ open: true, schema: s.schema, database: s.database })}>
-              新建表
+              {tr('query.newTable')}
             </Button>
             <Button size="small" icon={<PlusOutlined />}
               onClick={() => setQueryCreateView({ open: true, schema: s.schema, database: s.database })}>
-              新建视图
+              {tr('query.newView')}
             </Button>
           </div>
           <Spin spinning={s.loading}>
@@ -1338,40 +1340,40 @@ const SQLEditor: React.FC = () => {
               size="small"
               dataSource={s.items}
               rowKey="name"
-              pagination={{ pageSize: s.pageSize, total: s.totalItems, size: 'small', showTotal: (t: number) => `${t} 个对象` }}
+              pagination={{ pageSize: s.pageSize, total: s.totalItems, size: 'small', showTotal: (total: number) => tr('query.nObjects', { n: total }) }}
               columns={[
-                { title: '名称', dataIndex: 'name', key: 'name', render: (v: string, r: any) => (
+                { title: tr('query.nameCol'), dataIndex: 'name', key: 'name', render: (v: string, r: any) => (
                   <a onClick={() => openTableTab(r.schema || s.schema, v, r.type === 'view', r.database || s.database, s.dsId)}>
                     {r.type === 'view' ? <EyeOutlined style={{ marginRight: 4, color: '#52c41a' }} /> : <TableOutlined style={{ marginRight: 4, color: '#1890ff' }} />}
                     {v}
                   </a>
                 )},
-                { title: '类型', dataIndex: 'type', key: 'type', width: 80, render: (v: string) => v === 'view' ? <Tag>视图</Tag> : <Tag color="blue">表</Tag> },
-                { title: '操作', key: 'action', width: 180, render: (_: any, r: any) => (
+                { title: tr('query.typeCol'), dataIndex: 'type', key: 'type', width: 80, render: (v: string) => v === 'view' ? <Tag>{tr('query.viewLabel')}</Tag> : <Tag color="blue">{tr('query.tableLabel')}</Tag> },
+                { title: tr('query.actionCol'), key: 'action', width: 180, render: (_: any, r: any) => (
                   <Space size={4}>
-                    <Button type="link" size="small" onClick={() => openTableTab(r.schema || s.schema, r.name, r.type === 'view', r.database || s.database, s.dsId)}>数据</Button>
+                    <Button type="link" size="small" onClick={() => openTableTab(r.schema || s.schema, r.name, r.type === 'view', r.database || s.database, s.dsId)}>{tr('query.dataBtn')}</Button>
                     <Button type="link" size="small" onClick={() => {
                       setDrawerTarget({ schema: r.schema || s.schema, table: r.name, isView: r.type === 'view', database: r.database || s.database, dsId: s.dsId });
                       setDrawerOpen(true);
-                    }}>结构</Button>
+                    }}>{tr('query.structureBtn')}</Button>
                     <Button type="link" size="small" danger onClick={() => {
                       Modal.confirm({
-                        title: `确认删除 ${r.type === 'view' ? '视图' : '表'} ${r.name}?`,
-                        content: '此操作不可撤销',
+                        title: tr('query.confirmDeleteObj', { type: r.type === 'view' ? tr('query.viewLabel') : tr('query.tableLabel'), name: r.name }),
+                        content: tr('query.irreversible'),
                         okType: 'danger',
                         onOk: async () => {
                           try {
                             const dropSQL = r.type === 'view' ? `DROP VIEW ${r.name}` : `DROP TABLE ${r.name}`;
                             await queryAPI.executeDDL({ data_source_id: s.dsId, sql: dropSQL, schema: r.schema || s.schema, database: r.database || s.database });
-                            message.success('已删除');
+                            message.success(tr('query.deleted'));
                             updateTab(tab.id, { loading: true });
                             dsAPI.tableList(s.dsId, s.schema, s.database).then((res: any) => {
                               updateTab(tab.id, { items: res.data?.data || [], totalItems: (res.data?.data || []).length, loading: false });
                             });
-                          } catch { message.error('删除失败'); }
+                          } catch { message.error(tr('query.deleteFailed')); }
                         }
                       });
-                    }}>删除</Button>
+                    }}>{tr('query.delete')}</Button>
                   </Space>
                 )},
               ]}
@@ -1491,7 +1493,7 @@ const SQLEditor: React.FC = () => {
     }
     try {
       await queryAPI.executeDDL({ data_source_id: treeDSRef.current || '', sql, schema: schema || undefined, database: deleteTarget.database || currentDatabase || undefined });
-      message.success(`已删除${isView ? '视图' : '表'}: ${name}`);
+      message.success(`${tr('query.deleted')}: ${name}`);
       setDeleteTarget({ open: false, schema: '', name: '', isView: false });
       setDeleteConfirmName('');
       // Refresh tree
@@ -1515,7 +1517,7 @@ const SQLEditor: React.FC = () => {
   };
 
   const handleExportSubmit = async () => {
-    message.info('导出任务功能为专业版功能');
+    message.info(tr('query.exportIsPro'));
     setExportModalOpen(false);
   };
 
@@ -1675,7 +1677,7 @@ const SQLEditor: React.FC = () => {
         onClose={() => setDrawerOpen(false)} onRefreshTree={refreshTree} />
 
       {/* View definition modal */}
-      <Modal title={`视图定义 · ${viewDef?.name || ''}`} open={viewDefOpen} onCancel={() => setViewDefOpen(false)} footer={null} width={800}>
+      <Modal title={`${tr('query.viewDefinition')} · ${viewDef?.name || ''}`} open={viewDefOpen} onCancel={() => setViewDefOpen(false)} footer={null} width={800}>
         <Spin spinning={viewDefLoading}>
           <div style={{ border: '1px solid #d9d9d9', borderRadius: 4 }}>
             <Editor height={400} defaultLanguage="sql" value={viewDef?.definition || ''}
@@ -1695,11 +1697,11 @@ const SQLEditor: React.FC = () => {
         width={450}
       >
         <Form form={exportForm} layout="vertical">
-          <Form.Item label="导出内容" name="export_content" initialValue="all">
+          <Form.Item label={tr('query.exportContent')} name="export_content" initialValue="all">
             <Radio.Group>
-              <Radio value="all">结构 + 数据</Radio>
-              <Radio value="structure">仅结构</Radio>
-              <Radio value="data">仅数据</Radio>
+              <Radio value="all">{tr('query.structureAndData')}</Radio>
+              <Radio value="structure">{tr('query.structureOnly')}</Radio>
+              <Radio value="data">{tr('query.dataOnly')}</Radio>
             </Radio.Group>
           </Form.Item>
           <Form.Item label={tr('query.exportFormat')} name="export_format">
@@ -1760,18 +1762,18 @@ const SQLEditor: React.FC = () => {
 
       {/* Delete Table/View Confirmation Modal */}
       <Modal
-        title={`删除${deleteTarget.isView ? '视图' : '表'}`}
+        title={tr('query.deleteViewOrTable', { type: deleteTarget.isView ? tr('query.viewLabel') : tr('query.tableLabel') })}
         open={deleteTarget.open}
         onCancel={() => { setDeleteTarget({ open: false, schema: '', name: '', isView: false }); setDeleteConfirmName(''); }}
         onOk={handleDeleteTableOrView}
-        okText="确认删除"
+        okText={tr('common.deleteConfirm')}
         okButtonProps={{ danger: true, disabled: deleteConfirmName !== deleteTarget.name }}
       >
         <div style={{ marginBottom: 12 }}>
           <p style={{ color: '#e74c3c', fontWeight: 500 }}>
-            此操作将永久删除 {deleteTarget.isView ? '视图' : '表'} <strong>{deleteTarget.schema}.{deleteTarget.name}</strong> 及其所有数据，不可恢复。
+            {tr('query.confirmDeletePermanent', { type: deleteTarget.isView ? tr('query.viewLabel') : tr('query.tableLabel') })} <strong>{deleteTarget.schema}.{deleteTarget.name}</strong> {tr('query.andAllData')}
           </p>
-          <p>请输入 {deleteTarget.isView ? '视图' : '表'} 名称以确认：</p>
+          <p>{tr('query.enterNameConfirm', { type: deleteTarget.isView ? tr('query.viewLabel') : tr('query.tableLabel') })}</p>
           <Input
             placeholder={deleteTarget.name}
             value={deleteConfirmName}

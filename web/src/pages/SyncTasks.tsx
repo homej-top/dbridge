@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Table,
   Button,
@@ -16,6 +17,7 @@ import { syncAPI, dsAPI } from '../api';
 import type { SyncTask, DataSource } from '../types';
 
 const SyncTasks: React.FC = () => {
+  const { t: tr } = useTranslation();
   const [data, setData] = useState<SyncTask[]>([]);
   const [dataSources, setDataSources] = useState<DataSource[]>([]);
   const [loading, setLoading] = useState(false);
@@ -52,7 +54,7 @@ const SyncTasks: React.FC = () => {
     const values = await form.validateFields();
     try {
       await syncAPI.create(values);
-      message.success('创建成功');
+      message.success(tr('syncTasks.createdSuccess'));
       setModalOpen(false);
       fetchData();
     } catch {
@@ -63,7 +65,7 @@ const SyncTasks: React.FC = () => {
   const handleStart = async (id: string) => {
     try {
       await syncAPI.start(id);
-      message.success('任务已启动');
+      message.success(tr('syncTasks.taskStarted'));
       fetchData();
     } catch {
       // handled
@@ -73,7 +75,7 @@ const SyncTasks: React.FC = () => {
   const handleStop = async (id: string) => {
     try {
       await syncAPI.stop(id);
-      message.success('任务已停止');
+      message.success(tr('syncTasks.taskStopped'));
       fetchData();
     } catch {
       // handled
@@ -81,19 +83,19 @@ const SyncTasks: React.FC = () => {
   };
 
   const statusMap: Record<string, { color: string; text: string }> = {
-    pending: { color: 'default', text: '等待中' },
-    running: { color: 'processing', text: '运行中' },
-    completed: { color: 'success', text: '已完成' },
-    failed: { color: 'error', text: '失败' },
-    stopped: { color: 'warning', text: '已停止' },
+    pending: { color: 'default', text: tr('syncTasks.statusPending') },
+    running: { color: 'processing', text: tr('syncTasks.statusRunning') },
+    completed: { color: 'success', text: tr('syncTasks.statusCompleted') },
+    failed: { color: 'error', text: tr('syncTasks.statusFailed') },
+    stopped: { color: 'warning', text: tr('syncTasks.statusStopped') },
   };
 
   const columns = [
-    { title: '任务名称', dataIndex: 'name', key: 'name' },
-    { title: '源表', dataIndex: 'source_table', key: 'source_table' },
-    { title: '目标表', dataIndex: 'target_table', key: 'target_table' },
+    { title: tr('syncTasks.taskName'), dataIndex: 'name', key: 'name' },
+    { title: tr('syncTasks.sourceTable'), dataIndex: 'source_table', key: 'source_table' },
+    { title: tr('syncTasks.targetTable'), dataIndex: 'target_table', key: 'target_table' },
     {
-      title: '状态',
+      title: tr('syncTasks.status'),
       dataIndex: 'status',
       key: 'status',
       render: (s: string) => {
@@ -102,15 +104,15 @@ const SyncTasks: React.FC = () => {
       },
     },
     {
-      title: '进度',
+      title: tr('syncTasks.progress'),
       dataIndex: 'progress',
       key: 'progress',
       width: 120,
       render: (p: number) => <Progress percent={Math.round(p)} size="small" strokeColor="#20a53a" />,
     },
-    { title: '最后同步', dataIndex: 'last_sync_time', key: 'last_sync_time' },
+    { title: tr('syncTasks.lastSync'), dataIndex: 'last_sync_time', key: 'last_sync_time' },
     {
-      title: '操作',
+      title: tr('syncTasks.action'),
       key: 'action',
       width: 120,
       render: (_: any, record: SyncTask) => (
@@ -120,14 +122,14 @@ const SyncTasks: React.FC = () => {
               style={{ color: '#20a53a' }}
               onClick={() => handleStart(record.id)}
             >
-              启动
+              {tr('syncTasks.start')}
             </a>
           ) : (
             <a
               style={{ color: '#e74c3c' }}
               onClick={() => handleStop(record.id)}
             >
-              停止
+              {tr('syncTasks.stop')}
             </a>
           )}
         </Space>
@@ -145,13 +147,13 @@ const SyncTasks: React.FC = () => {
           alignItems: 'center',
         }}
       >
-        <h2 style={{ margin: 0 }}>同步任务</h2>
+        <h2 style={{ margin: 0 }}>{tr('syncTasks.title')}</h2>
         <Button
           type="primary"
           icon={<PlusOutlined />}
           onClick={() => setModalOpen(true)}
         >
-          添加任务
+          {tr('syncTasks.addTask')}
         </Button>
       </div>
 
@@ -162,30 +164,30 @@ const SyncTasks: React.FC = () => {
         loading={loading}
         pagination={{
           showSizeChanger: true,
-          showTotal: (total) => `共 ${total} 条`,
+          showTotal: (total) => tr('syncTasks.totalItems', { total }),
           pageSizeOptions: ['10', '20', '50'],
         }}
       />
 
       <Modal
-        title="添加同步任务"
+        title={tr('syncTasks.createTask')}
         open={modalOpen}
         onOk={handleCreate}
         onCancel={() => setModalOpen(false)}
-        okText="创建"
-        cancelText="取消"
+        okText={tr('syncTasks.create')}
+        cancelText={tr('common.cancel')}
       >
         <Form form={form} layout="vertical">
           <Form.Item
             name="name"
-            label="任务名称"
+            label={tr('syncTasks.taskName')}
             rules={[{ required: true }]}
           >
-            <Input placeholder="请输入任务名称" />
+            <Input placeholder={tr('syncTasks.taskNamePlaceholder')} />
           </Form.Item>
           <Form.Item
             name="source_ds"
-            label="源数据源"
+            label={tr('syncTasks.sourceDS')}
             rules={[{ required: true }]}
           >
             <Select
@@ -193,12 +195,12 @@ const SyncTasks: React.FC = () => {
                 label: ds.name,
                 value: ds.id,
               }))}
-              placeholder="请选择源数据源"
+              placeholder={tr('syncTasks.selectSourceDS')}
             />
           </Form.Item>
           <Form.Item
             name="target_ds"
-            label="目标数据源"
+            label={tr('syncTasks.targetDS')}
             rules={[{ required: true }]}
           >
             <Select
@@ -206,29 +208,29 @@ const SyncTasks: React.FC = () => {
                 label: ds.name,
                 value: ds.id,
               }))}
-              placeholder="请选择目标数据源"
+              placeholder={tr('syncTasks.selectTargetDS')}
             />
           </Form.Item>
           <Form.Item
             name="source_table"
-            label="源表名"
+            label={tr('syncTasks.sourceTableName')}
             rules={[{ required: true }]}
           >
-            <Input placeholder="请输入源表名" />
+            <Input placeholder={tr('syncTasks.sourceTablePlaceholder')} />
           </Form.Item>
           <Form.Item
             name="target_table"
-            label="目标表名"
+            label={tr('syncTasks.targetTableName')}
             rules={[{ required: true }]}
           >
-            <Input placeholder="请输入目标表名" />
+            <Input placeholder={tr('syncTasks.targetTablePlaceholder')} />
           </Form.Item>
-          <Form.Item name="sync_mode" label="同步模式" initialValue="full">
+          <Form.Item name="sync_mode" label={tr('syncTasks.syncMode')} initialValue="full">
             <Select
               options={[
-                { label: '全量同步', value: 'full' },
-                { label: '增量同步', value: 'incremental' },
-                { label: 'DDL 同步', value: 'ddl' },
+                { label: tr('syncTasks.modeFull'), value: 'full' },
+                { label: tr('syncTasks.modeIncremental'), value: 'incremental' },
+                { label: tr('syncTasks.modeDDL'), value: 'ddl' },
               ]}
             />
           </Form.Item>
