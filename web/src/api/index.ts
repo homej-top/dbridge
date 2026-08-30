@@ -87,7 +87,7 @@ export const dsAPI = {
 
 export const queryAPI = {
   // Generic execute (auto-detect SQL type)
-  execute: (data: { data_source_id: string; sql: string; schema?: string; database?: string; page?: number; page_size?: number }) =>
+  execute: (data: { data_source_id: string; sql: string; schema?: string; database?: string; page?: number; page_size?: number; category?: string }) =>
     request.post('/query', data),
   // Typed endpoints
   executeDQL: (data: { data_source_id: string; sql: string; schema?: string; database?: string; page?: number; page_size?: number }) =>

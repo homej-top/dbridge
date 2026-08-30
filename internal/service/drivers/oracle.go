@@ -392,6 +392,46 @@ func (d *OracleDriver) GetViewDefinition(schema, view string) (string, error) {
 	return "", fmt.Errorf("view %s.%s not found or not accessible", schema, view)
 }
 
+// translateOracleShowCommand translates SQL*Plus SHOW commands to SQL equivalents.
+// SQL*Plus commands are not valid SQL and must be converted before execution.
+func translateOracleShowCommand(sql string) string {
+	trimmed := strings.TrimSpace(sql)
+	upper := strings.ToUpper(trimmed)
+
+	// SHOW PDBS -> SELECT * FROM V$PDBS
+	if strings.HasPrefix(upper, "SHOW PDBS") {
+		return "SELECT * FROM V$PDBS"
+	}
+
+	// SHOW PARAMETER [name] -> SELECT * FROM V$PARAMETER WHERE NAME LIKE '%name%'
+	if strings.HasPrefix(upper, "SHOW PARAMETER") {
+		param := strings.TrimSpace(trimmed[12:]) // len("SHOW PARAMETER") = 12
+		if param == "" {
+			return "SELECT * FROM V$PARAMETER"
+		}
+		// Escape single quotes in parameter name
+		param = strings.ReplaceAll(param, "'", "''")
+		return fmt.Sprintf("SELECT * FROM V$PARAMETER WHERE NAME LIKE '%%%s%%'", param)
+	}
+
+	// SHOW USER -> SELECT USER FROM DUAL
+	if strings.HasPrefix(upper, "SHOW USER") {
+		return "SELECT USER FROM DUAL"
+	}
+
+	// SHOW RELATIONAL -> SELECT VALUE FROM V$OPTION WHERE PARAMETER = 'Real Application Security'
+	if strings.HasPrefix(upper, "SHOW RELATIONAL") {
+		return "SELECT VALUE FROM V$OPTION WHERE PARAMETER = 'Real Application Security'"
+	}
+
+	// SHOW EDITION -> SELECT SYS_CONTEXT('USERENV', 'CURRENT_EDITION_NAME') FROM DUAL
+	if strings.HasPrefix(upper, "SHOW EDITION") {
+		return "SELECT SYS_CONTEXT('USERENV', 'CURRENT_EDITION_NAME') FROM DUAL"
+	}
+
+	return sql
+}
+
 // ─── Query Execution ──────────────────────────────────────────────────────
 
 func (d *OracleDriver) ExecuteQuery(sql string, schema string) (*QueryResult, error) {
@@ -401,6 +441,9 @@ func (d *OracleDriver) ExecuteQuery(sql string, schema string) (*QueryResult, er
 		// ORA-01435 (user does not exist) when the DDL already specifies the owner.
 		_, _ = d.db.Exec(`ALTER SESSION SET CURRENT_SCHEMA = "` + strings.ToUpper(schema) + `"`)
 	}
+
+	// Translate SQL*Plus SHOW commands to SQL equivalents
+	sql = translateOracleShowCommand(sql)
 
 	start := time.Now()
 	isSelect := IsSelectStatement(sql)

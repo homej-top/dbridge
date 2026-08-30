@@ -63,16 +63,20 @@ type QueryInput struct {
 	DataSourceID     string `json:"data_source_id" binding:"required"`
 	SQL              string `json:"sql" binding:"required"`
 	Schema           string `json:"schema"`
-	Database         string `json:"database"` // optional, for PG/MSSQL to target a specific database
+	Database         string `json:"database"`
 	Page             int    `json:"page"`
 	PageSize         int    `json:"page_size"`
+	Category         string `json:"category"` // "data" | "meta" | "other" — classified by frontend
 }
 
 type QueryOutput struct {
-	Columns   []string        `json:"columns"`
-	Rows      [][]interface{} `json:"rows"`
-	TotalRows int64           `json:"total_rows"`
-	Duration  int64           `json:"duration"` // milliseconds
+	Columns      []string        `json:"columns"`
+	Rows         [][]interface{} `json:"rows"`
+	TotalRows    int64           `json:"total_rows"`
+	Duration     int64           `json:"duration"` // milliseconds
+	Mode         string          `json:"mode"`     // "data" | "meta" | "message"
+	Truncated    bool            `json:"truncated,omitempty"`
+	AffectedRows int64           `json:"affected_rows,omitempty"`
 }
 
 func (s *QueryService) Execute(input QueryInput) (*QueryOutput, error) {
@@ -82,13 +86,6 @@ func (s *QueryService) Execute(input QueryInput) (*QueryOutput, error) {
 	}
 	defer driver.Close()
 
-	lower := strings.ToLower(strings.TrimSpace(input.SQL))
-	isSelect := strings.HasPrefix(lower, "select") ||
-		strings.HasPrefix(lower, "show ") ||
-		strings.HasPrefix(lower, "describe ") ||
-		strings.HasPrefix(lower, "desc ") ||
-		strings.HasPrefix(lower, "explain ")
-
 	start := time.Now()
 
 	// Handle SQL Server @RENAME_SCHEMA marker
@@ -96,22 +93,30 @@ func (s *QueryService) Execute(input QueryInput) (*QueryOutput, error) {
 		return s.executeSQLServerSchemaRename(driver, matches[1], matches[2], start)
 	}
 
-	if isSelect {
-		return s.executePagedQuery(driver, input, start)
+	switch input.Category {
+	case "data":
+		out, err := s.executePagedQuery(driver, input, start)
+		if err != nil {
+			return s.executeDirect(driver, input, start, "data")
+		}
+		return out, nil
+	case "meta":
+		return s.executeMeta(driver, input, start)
+	case "other":
+		return s.executeOther(driver, input, start)
+	default:
+		// Backward compatibility: no category provided — use old prefix matching
+		lower := strings.ToLower(strings.TrimSpace(input.SQL))
+		isSelect := strings.HasPrefix(lower, "select") ||
+			strings.HasPrefix(lower, "show ") ||
+			strings.HasPrefix(lower, "describe ") ||
+			strings.HasPrefix(lower, "desc ") ||
+			strings.HasPrefix(lower, "explain ")
+		if isSelect {
+			return s.executePagedQuery(driver, input, start)
+		}
+		return s.executeOther(driver, input, start)
 	}
-
-	result, err := driver.ExecuteQuery(input.SQL, input.Schema)
-	if err != nil {
-		return nil, fmt.Errorf("exec error: %w", err)
-	}
-
-	duration := time.Since(start).Milliseconds()
-	return &QueryOutput{
-		Columns:   result.Columns,
-		Rows:      result.Rows,
-		TotalRows: result.TotalRows,
-		Duration:  duration,
-	}, nil
 }
 
 // connectDriver creates a DatabaseDriver through the global pool manager.
@@ -147,6 +152,7 @@ func (s *QueryService) executePagedQuery(driver drivers.DatabaseDriver, input Qu
 			Rows:      result.Rows,
 			TotalRows: result.TotalRows,
 			Duration:  time.Since(start).Milliseconds(),
+			Mode:      "data",
 		}, nil
 	}
 
@@ -202,9 +208,72 @@ func (s *QueryService) executePagedQuery(driver drivers.DatabaseDriver, input Qu
 		Rows:      result.Rows,
 		TotalRows: total,
 		Duration:  time.Since(start).Milliseconds(),
+		Mode:      "data",
 	}, nil
 }
 
+
+const metaRowCap = 10000
+
+// executeMeta runs a metadata query (SHOW/DESCRIBE/EXPLAIN) without pagination.
+// Results are capped at metaRowCap rows to prevent excessive memory usage.
+func (s *QueryService) executeMeta(driver drivers.DatabaseDriver, input QueryInput, start time.Time) (*QueryOutput, error) {
+	result, err := driver.ExecuteQuery(input.SQL, input.Schema)
+	if err != nil {
+		return nil, fmt.Errorf("query error: %w", err)
+	}
+	truncated := false
+	rows := result.Rows
+	if len(rows) > metaRowCap {
+		rows = rows[:metaRowCap]
+		truncated = true
+	}
+	return &QueryOutput{
+		Columns:   result.Columns,
+		Rows:      rows,
+		TotalRows: int64(len(rows)),
+		Duration:  time.Since(start).Milliseconds(),
+		Mode:      "meta",
+		Truncated: truncated,
+	}, nil
+}
+
+// executeDirect runs SQL without pagination or wrapping. Used as fallback when
+// COUNT(*) wrapping fails for "data" category queries.
+func (s *QueryService) executeDirect(driver drivers.DatabaseDriver, input QueryInput, start time.Time, fallbackMode string) (*QueryOutput, error) {
+	result, err := driver.ExecuteQuery(input.SQL, input.Schema)
+	if err != nil {
+		return nil, fmt.Errorf("query error: %w", err)
+	}
+	mode := fallbackMode
+	if len(result.Columns) == 0 && result.AffectedRows > 0 {
+		mode = "message"
+	}
+	return &QueryOutput{
+		Columns:      result.Columns,
+		Rows:         result.Rows,
+		TotalRows:    result.TotalRows,
+		Duration:     time.Since(start).Milliseconds(),
+		Mode:         mode,
+		AffectedRows: result.AffectedRows,
+	}, nil
+}
+
+// executeOther runs DDL/DML statements and returns a message-mode result.
+func (s *QueryService) executeOther(driver drivers.DatabaseDriver, input QueryInput, start time.Time) (*QueryOutput, error) {
+	result, err := driver.ExecuteQuery(input.SQL, input.Schema)
+	if err != nil {
+		return nil, fmt.Errorf("exec error: %w", err)
+	}
+	return &QueryOutput{
+		Columns:      result.Columns,
+		Rows:         result.Rows,
+		TotalRows:    result.TotalRows,
+		Duration:     time.Since(start).Milliseconds(),
+		Mode:         "message",
+		AffectedRows: result.AffectedRows,
+	}, nil
+}
 
 // executeSQLServerSchemaRename renames a SQL Server schema.
 func (s *QueryService) executeSQLServerSchemaRename(driver drivers.DatabaseDriver, oldName, newName string, start time.Time) (*QueryOutput, error) {
@@ -235,5 +304,6 @@ EXEC sp_executesql @sql;`, newName, oldName)
 		Rows:      [][]interface{}{{"Schema renamed successfully"}},
 		TotalRows: 1,
 		Duration:  duration,
+		Mode:      "message",
 	}, nil
 }

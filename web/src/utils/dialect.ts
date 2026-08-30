@@ -614,3 +614,68 @@ const dialects: Record<string, DbDialect> = {
 export function getDialect(dbType: string): DbDialect {
   return dialects[dbType] || mysqlDialect;
 }
+
+// ─── SQL Classification ─────────────────────────────────────────────────────
+
+export type SQLCategory = 'data' | 'meta' | 'other';
+
+const kwRe = /^\s*(?:\/\*[\s\S]*?\*\/\s*)*([a-zA-Z_]\w*)(?:\s|$)/;
+const withDmlRe = /^with\s[\s\S]*?\b(insert|update|delete|merge)\b/i;
+
+const metaKeywordsByDialect: Record<string, string[]> = {
+  mysql:      ['show', 'describe', 'desc', 'explain'],
+  mariadb:    ['show', 'describe', 'desc', 'explain'],
+  oceanbase:  ['show', 'describe', 'desc', 'explain'],
+  postgres:   ['show', 'describe', 'desc', 'explain'],
+  postgresql: ['show', 'describe', 'desc', 'explain'],
+  oracle:     ['show', 'describe', 'desc', 'explain'],
+  sqlserver:  ['explain'],
+  sqlite:     [],
+};
+
+function extractFirstStatement(sql: string): string {
+  let inSingle = false, inDouble = false;
+  let inLineComment = false, inBlockComment = false;
+  for (let i = 0; i < sql.length; i++) {
+    const ch = sql[i], next = sql[i + 1];
+    if (inLineComment) { if (ch === '\n') inLineComment = false; continue; }
+    if (inBlockComment) { if (ch === '*' && next === '/') { inBlockComment = false; i++; } continue; }
+    if (inSingle) { if (ch === "'" && next === "'") { i++; continue; } if (ch === "'") inSingle = false; continue; }
+    if (inDouble) { if (ch === '"') inDouble = false; continue; }
+    if (ch === '-' && next === '-') { inLineComment = true; i++; continue; }
+    if (ch === '/' && next === '*') { inBlockComment = true; i++; continue; }
+    if (ch === "'") { inSingle = true; continue; }
+    if (ch === '"') { inDouble = true; continue; }
+    if (ch === ';') return sql.substring(0, i);
+  }
+  return sql;
+}
+
+export function classifySQL(sql: string, dbType: string): SQLCategory {
+  const dialect = dialectOf(dbType);
+  const firstStmt = extractFirstStatement(sql).trim();
+  if (!firstStmt) return 'other';
+
+  const cleaned = firstStmt.replace(/^\s*(?:\/\*[\s\S]*?\*\/\s*)*/, '').trim();
+  const lower = cleaned.toLowerCase();
+
+  const kwMatch = lower.match(kwRe);
+  if (!kwMatch) return 'other';
+  const firstKw = kwMatch[1];
+
+  if (firstKw === 'select') return 'data';
+
+  if (firstKw === 'with') {
+    return withDmlRe.test(lower) ? 'other' : 'data';
+  }
+
+  const key = dbType.toLowerCase();
+  const metaKws = metaKeywordsByDialect[key] ?? metaKeywordsByDialect[dialect] ?? [];
+  if (metaKws.includes(firstKw)) return 'meta';
+
+  if (dialect === 'sqlserver' && (firstKw === 'exec' || firstKw === 'execute')) {
+    if (/^(?:exec|execute)\s+sp_/i.test(cleaned)) return 'meta';
+  }
+
+  return 'other';
+}

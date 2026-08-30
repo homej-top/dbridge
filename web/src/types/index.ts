@@ -68,6 +68,9 @@ export interface QueryResult {
   rows: any[][];
   total_rows: number;
   duration: number;
+  mode?: string;
+  truncated?: boolean;
+  affected_rows?: number;
 }
 
 export interface APIResponse<T = any> {

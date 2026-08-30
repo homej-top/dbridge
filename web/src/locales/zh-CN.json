@@ -243,7 +243,10 @@
     "andAllData": "及其所有数据，不可恢复。",
     "enterNameConfirm": "请输入 {{type}} 名称以确认：",
     "copied": "已复制",
-    "noDataDash": "-- 无"
+    "noDataDash": "-- 无",
+    "executeSuccess": "执行成功",
+    "affectedRows": "影响行数",
+    "resultTruncated": "结果集已被截断，仅显示前 10000 行"
   },
   "dbManage": {
     "title": "数据库管理",

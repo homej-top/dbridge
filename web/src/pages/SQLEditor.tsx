@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { useTranslation } from 'react-i18next';
 import {
   Select, Button, Table, message, Card, Space, Spin, Empty, Tooltip, Input, Dropdown, Modal,
-  Tabs, Form, Radio, Checkbox, Popconfirm, Tag,
+  Tabs, Form, Radio, Checkbox, Popconfirm, Tag, Alert,
 } from 'antd';
 import Editor, { loader } from '@monaco-editor/react';
 import * as monaco from 'monaco-editor';
@@ -43,7 +43,7 @@ import CreateTableModal from '../components/CreateTableModal';
 import CreateViewModal from '../components/CreateViewModal';
 import SchemaFormModal from '../components/SchemaFormModal';
 import SchemaTree from '../components/SchemaTree';
-import { getDialect } from '../utils/dialect';
+import { getDialect, classifySQL } from '../utils/dialect';
 
 // --- Types ---
 
@@ -52,6 +52,9 @@ interface QueryResult {
   rows: any[][];
   total_rows: number;
   duration: number;
+  mode?: string;
+  truncated?: boolean;
+  affected_rows?: number;
 }
 
 interface BaseTab {
@@ -573,11 +576,19 @@ const SQLEditor: React.FC = () => {
   const executeQuery = useCallback(async (sql: string, schema: string | undefined, page: number, pageSize: number, database?: string, dsId?: string): Promise<QueryResult | null> => {
     const ds = dsId ;
     if (!ds) { message.warning(tr('query.selectDS')); return null; }
+    const dsInfo = dataSources.find(d => d.id === ds);
+    const dbTypeForClassify = dsInfo?.type || dbType;
+    const category = classifySQL(sql, dbTypeForClassify);
     try {
-      const res = await queryAPI.execute({ data_source_id: ds, sql, schema: schema || undefined, page, page_size: pageSize, database });
+      const res = await queryAPI.execute({
+        data_source_id: ds, sql, schema: schema || undefined, database,
+        category,
+        page: category === 'data' ? page : 0,
+        page_size: category === 'data' ? pageSize : 0,
+      });
       return res.data.data;
     } catch { return null; }
-  }, []);
+  }, [dataSources, dbType]);
 
   // Fetch available databases/schemas for the tab (dsId passed directly to avoid stale state)
   const fetchDatabasesForTab = useCallback(async (tabId: string, dsId: string) => {
@@ -959,6 +970,57 @@ const SQLEditor: React.FC = () => {
   const renderTableResult = (tab: TabItem, onPageChange?: (page: number, size?: number) => void) => {
     const result = tab.result;
     if (!result) return null;
+
+    if (result.mode === 'message') {
+      const affected = result.affected_rows ?? 0;
+      return (
+        <div style={{ padding: 24 }}>
+          <Alert
+            type="success"
+            showIcon
+            message={affected > 0
+              ? `${tr('query.executeSuccess')} — ${tr('query.affectedRows')}: ${affected}`
+              : tr('query.executeSuccess')}
+            description={`${tr('query.duration')}: ${result.duration}ms`}
+          />
+        </div>
+      );
+    }
+
+    if (result.mode === 'meta') {
+      const metaColumns = result.columns.map((col) => ({
+        title: col, dataIndex: col, key: col, ellipsis: { showTitle: true },
+        render: (val: any) => (
+          <Tooltip title={val != null ? String(val) : ''} placement="topLeft">
+            <div style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {val != null ? String(val) : ''}
+            </div>
+          </Tooltip>
+        ),
+      }));
+      const metaDataSource = result.rows.map((row, i) => {
+        const obj: Record<string, any> = { key: i };
+        result.columns.forEach((c, j) => { obj[c] = row[j]; });
+        return obj;
+      });
+      return (
+        <>
+          {result.truncated && (
+            <Alert type="warning" showIcon message={tr('query.resultTruncated')} style={{ margin: '8px 16px' }} />
+          )}
+          <Table
+            columns={metaColumns} dataSource={metaDataSource}
+            scroll={{ x: 'max-content' }} size="small" tableLayout="fixed"
+            loading={tab.loading}
+            pagination={false}
+          />
+          <div style={{ padding: '8px 16px', color: '#999', fontSize: 12 }}>
+            {tr('common.total')} {result.rows.length} {tr('common.rows')} | {tr('query.duration')} {result.duration}ms
+          </div>
+        </>
+      );
+    }
+
     const columns: any[] = result.columns.map((col) => {
       const meta = columnMeta[col];
       const tooltip = meta ? `${meta.type}${meta.key === 'PRI' ? ' PK' : ''}${meta.nullable ? '' : ' NOT NULL'}${meta.comment ? ' - ' + meta.comment : ''}` : '';
