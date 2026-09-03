@@ -201,7 +201,7 @@ func main() {
 }
 
 // setupCORS configures CORS middleware from config file.
-// In development, localhost:5174 is always allowed.
+// In development, localhost:5170 is always allowed.
 func setupCORS(r *gin.Engine, cfg *config.Config, sugar *zap.SugaredLogger) {
 	if !cfg.CORS.Enabled {
 		sugar.Info("CORS disabled")
@@ -214,8 +214,8 @@ func setupCORS(r *gin.Engine, cfg *config.Config, sugar *zap.SugaredLogger) {
 	}
 	// Development: always allow local Vite dev server
 	if cfg.Server.Env == "development" {
-		allowedOrigins["http://localhost:5174"] = true
-		allowedOrigins["http://127.0.0.1:5174"] = true
+		allowedOrigins["http://localhost:5170"] = true
+		allowedOrigins["http://127.0.0.1:5170"] = true
 	}
 
 	methods := strings.Join(cfg.CORS.AllowedMethods, ", ")

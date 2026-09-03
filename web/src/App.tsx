@@ -15,7 +15,6 @@ import Dashboard from './pages/Dashboard';
 import DataSources from './pages/DataSources';
 import SQLEditor from './pages/SQLEditor';
 import Compare from './pages/Compare';
-import SyncTasks from './pages/SyncTasks';
 import AuditLogs from './pages/AuditLogs';
 import Settings from './pages/Settings';
 
@@ -102,7 +101,6 @@ const App: React.FC = () => {
             <Route path="datasources" element={<DataSources />} />
             <Route path="query" element={<SQLEditor />} />
             <Route path="compare" element={<Compare />} />
-            <Route path="sync" element={<SyncTasks />} />
             <Route path="audit" element={<AuditLogs />} />
             <Route path="settings" element={<Settings />} />
           </Route>

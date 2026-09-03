@@ -89,7 +89,7 @@ DBridge（数桥）是一款面向开发者和 DBA 的 **Web 端数据库管理�
 
 ```bash
 # 1. 克隆项目
-git clone https://github.com/your-org/dbridge.git
+git clone https://github.com/homej-top/dbridge.git
 cd dbridge
 
 # 2. 构建全栈（后端 + 前端）
@@ -99,7 +99,7 @@ cd dbridge
 ./start.sh
 
 # 4. 访问
-#    前端: http://localhost:5174
+#    前端: http://localhost:5170
 #    后端: http://localhost:8082
 #    默认账号: admin / 123456
 ```
@@ -111,7 +111,7 @@ cd dbridge
 
 # 前端开发服务器（热更新）
 cd web && npm install && npm run dev
-# 访问 http://localhost:5174
+# 访问 http://localhost:5170
 ```
 
 #### Docker 部署
@@ -239,11 +239,11 @@ DBridge is a **web-based database management and synchronization platform** for 
 ### Quick Start
 
 ```bash
-git clone https://github.com/your-org/dbridge.git
+git clone https://github.com/homej-top/dbridge.git
 cd dbridge
 ./build.sh
 ./start.sh
-# Open http://localhost:5174
+# Open http://localhost:5170
 # Default credentials: admin / 123456
 ```
 

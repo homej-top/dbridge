@@ -17,7 +17,6 @@ const { Sider, Header, Content } = Layout;
 import {
   DashboardOutlined,
   LinkOutlined,
-  SyncOutlined,
   SettingOutlined,
   LogoutOutlined,
   MenuFoldOutlined,
@@ -52,12 +51,6 @@ const MainLayout: React.FC = () => {
       children: [
         { key: '/query', label: t('nav.query') },
         { key: '/compare', label: t('nav.compare') },
-      ],
-    },
-    {
-      key: 'migrate', icon: <SyncOutlined />, label: t('nav.migrate'),
-      children: [
-        { key: '/sync', label: t('nav.syncTasks') },
       ],
     },
     { type: 'divider' as const },
