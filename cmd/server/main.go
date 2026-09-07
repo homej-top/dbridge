@@ -147,6 +147,7 @@ func main() {
 
 	// Serve frontend static files (built React SPA)
 	r.Static("/assets", "./web/dist/assets")
+	r.Static("/static", "./web/dist")
 	r.StaticFile("/favicon.svg", "./web/dist/favicon.svg")
 	r.StaticFile("/icons.svg", "./web/dist/icons.svg")
 	r.NoRoute(func(c *gin.Context) {

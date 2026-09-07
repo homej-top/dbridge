@@ -127,14 +127,18 @@ const MainLayout: React.FC = () => {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
+            gap: 8,
             color: '#fff',
             fontWeight: 'bold',
-            fontSize: collapsed ? 16 : 18,
+            fontSize: collapsed ? 0 : 18,
             borderBottom: '1px solid rgba(255,255,255,0.1)',
             letterSpacing: 1,
+            overflow: 'hidden',
+            whiteSpace: 'nowrap',
           }}
         >
-          {collapsed ? 'DB' : 'DBridge'}
+          <img src="/static/logo.svg" alt="logo" style={{ height: 32, width: 32, flexShrink: 0 }} />
+          {!collapsed && <span>DBridge</span>}
         </div>
         <Menu
           theme="dark"
