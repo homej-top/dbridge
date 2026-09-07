@@ -2,7 +2,7 @@
 # ============================================================
 # DBridge Build Script
 # Builds both backend (Go) and frontend (React/Vite)
-# Usage: ./build.sh [backend|frontend|all]
+# Usage: ./build.sh [release] [backend|frontend|all]
 # ============================================================
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -15,11 +15,38 @@ RED='\033[0;31m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-TARGET="${1:-all}"
-BACKEND_BIN="db-sync-web-server"
+# Parse release flag
+BUILD_MODE="debug"
+ARGS=()
+for arg in "$@"; do
+    case "$arg" in
+        release)
+            BUILD_MODE="release"
+            ;;
+        *)
+            ARGS+=("$arg")
+            ;;
+    esac
+done
+TARGET="${ARGS[0]:-all}"
+
+if [ "$BUILD_MODE" = "release" ]; then
+    GO_LDFLAGS="-s -w"
+    GO_TRIMPATH="-trimpath"
+else
+    GO_LDFLAGS=""
+    GO_TRIMPATH=""
+fi
+
+BACKEND_BIN="dbridge"
 
 echo -e "${CYAN}============================================================${NC}"
 echo -e "${CYAN}  DBridge Build Script${NC}"
+if [ "$BUILD_MODE" = "release" ]; then
+    echo -e "${CYAN}  Mode: ${GREEN}release${NC} (no debug info)"
+else
+    echo -e "${CYAN}  Mode: ${YELLOW}debug${NC}"
+fi
 echo -e "${CYAN}============================================================${NC}"
 echo ""
 
@@ -88,13 +115,10 @@ build_backend() {
     echo "  Downloading dependencies..."
     cd "$SCRIPT_DIR"
 
-    # Sync vendor directory if it exists
+    # Download dependencies (skip tidy - not needed for building)
     if [ -d "vendor" ]; then
-        echo "  Syncing vendor directory..."
-        $GO_BIN mod tidy 2>/dev/null || true
-        $GO_BIN mod vendor 2>/dev/null || true
+        echo "  Using vendor directory"
     else
-        $GO_BIN mod tidy 2>/dev/null || true
         $GO_BIN mod download 2>/dev/null || true
     fi
 
@@ -105,16 +129,21 @@ build_backend() {
     export CGO_ENABLED=1
 
     # Build with -mod=mod (bypass vendor if inconsistent)
-    BUILD_OUT=$($GO_BIN build -mod=mod -o "$BACKEND_BIN" ./cmd/server/ 2>&1)
+    if [ -n "$GO_LDFLAGS" ]; then
+        echo "  Build mode: release (stripping debug info)"
+        BUILD_OUT=$($GO_BIN build -mod=mod $GO_TRIMPATH -ldflags "$GO_LDFLAGS" -o "$BACKEND_BIN" ./cmd/server/ 2>&1)
+    else
+        echo "  Build mode: debug"
+        BUILD_OUT=$($GO_BIN build -mod=mod -o "$BACKEND_BIN" ./cmd/server/ 2>&1)
+    fi
     BUILD_EXIT=$?
 
     # If that fails, try syncing vendor and building
     if [ $BUILD_EXIT -ne 0 ]; then
         if [ -d "vendor" ]; then
-            echo "  ${YELLOW}Vendor issue detected, syncing...${NC}"
-            $GO_BIN mod tidy 2>/dev/null || true
+            echo "  ${YELLOW}Vendor issue detected, rebuilding vendor...${NC}"
             $GO_BIN mod vendor 2>/dev/null || true
-            $GO_BIN build -o "$BACKEND_BIN" ./cmd/server/ 2>&1
+            $GO_BIN build $GO_TRIMPATH ${GO_LDFLAGS:+-ldflags "$GO_LDFLAGS"} -o "$BACKEND_BIN" ./cmd/server/ 2>&1
             BUILD_EXIT=$?
         fi
     fi
@@ -197,11 +226,17 @@ case "$TARGET" in
         build_backend
         ;;
     *)
-        echo "Usage: $0 [backend|frontend|all|force]"
+        echo "Usage: $0 [release] [backend|frontend|all|force]"
+        echo "  release   - Build without debug info (stripped binary)"
         echo "  backend   - Build Go backend only"
         echo "  frontend  - Build React frontend only"
         echo "  all       - Build both (default)"
         echo "  force     - Build both, reinstall npm deps"
+        echo ""
+        echo "Examples:"
+        echo "  $0                  - Debug build (all)"
+        echo "  $0 release          - Release build (all, no debug info)"
+        echo "  $0 release backend  - Release build backend only"
         exit 1
         ;;
 esac

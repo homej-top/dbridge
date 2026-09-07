@@ -17,7 +17,7 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-BACKEND_BIN="db-sync-web-server"
+BACKEND_BIN="dbridge"
 PID_FILE=".dbridge.pid"
 LOG_FILE="logs/dbridge.log"
 PORT="${PORT:-8083}"

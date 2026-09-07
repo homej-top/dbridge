@@ -25,7 +25,7 @@ bash "$SCRIPT_DIR/stop.sh" --force 2>/dev/null
 echo ""
 
 # Rebuild if binary doesn't exist
-if [ ! -f "dbridge-web-server" ]; then
+if [ ! -f "dbridge" ]; then
     echo -e "  ${BOLD}1.5 Binary not found, building...${NC}"
     bash "$SCRIPT_DIR/build.sh" backend 2>/dev/null || true
     echo ""

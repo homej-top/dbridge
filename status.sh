@@ -16,7 +16,7 @@ BOLD='\033[1m'
 NC='\033[0m'
 
 PID_FILE=".dbridge.pid"
-BACKEND_BIN="db-sync-web-server"
+BACKEND_BIN="dbridge"
 PORT="${PORT:-8083}"
 
 echo -e "${CYAN}============================================================${NC}"
