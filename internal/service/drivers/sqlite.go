@@ -493,7 +493,11 @@ func (d *SQLiteDriver) GetTreeMetadata() TreeMetadata {
 		DBType: "sqlite",
 		Levels: []TreeLevel{
 			{Key: "schema", Label: "main", LabelKey: "tree.schema"},
+			{Key: "tables_folder", Label: "Tables", LabelKey: "tree.tables", Icon: "TableOutlined"},
+			{Key: "views_folder", Label: "Views", LabelKey: "tree.views", Icon: "EyeOutlined"},
+			{Key: "trigger_folder", Label: "Triggers", LabelKey: "tree.triggers", Icon: "ThunderboltOutlined"},
 		},
+		SupportedObjectTypes: []string{ObjectTypeTrigger},
 	}
 }
 
@@ -1091,4 +1095,133 @@ func (d *SQLiteDriver) BuildDropConstraint(table string, constraintName string) 
 }
 func (d *SQLiteDriver) BuildTableComment(table, newComment, oldComment string) (string, string, error) {
 	return "", "", fmt.Errorf("SQLite 不支持表注释")
+}
+
+// ─── Database Object Management ─────────────────────────────────────────
+
+func (d *SQLiteDriver) SupportedObjectTypes() []string { return []string{ObjectTypeTrigger} }
+
+func (d *SQLiteDriver) ListObjectsByType(schema, objectType string, opts ListOptions) (*ListResult, error) {
+	if objectType != ObjectTypeTrigger {
+		return nil, fmt.Errorf("unsupported object type: %s", objectType)
+	}
+
+	keyword := "%" + opts.Keyword + "%"
+	offset := (opts.Page - 1) * opts.PageSize
+
+	countSQL := `SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name NOT LIKE 'sqlite_%' AND ($1='' OR name LIKE $1)`
+	dataSQL := `SELECT name, '', '', '' FROM sqlite_master WHERE type='trigger' AND name NOT LIKE 'sqlite_%' AND ($1='' OR name LIKE $1) ORDER BY name LIMIT $2 OFFSET $3`
+
+	var total int64
+	if err := d.db.QueryRow(countSQL, keyword).Scan(&total); err != nil {
+		return nil, fmt.Errorf("count triggers failed: %w", err)
+	}
+
+	rows, err := d.db.Query(dataSQL, keyword, opts.PageSize, offset)
+	if err != nil {
+		return nil, fmt.Errorf("list triggers failed: %w", err)
+	}
+	defer rows.Close()
+
+	var objects []DBObject
+	for rows.Next() {
+		var obj DBObject
+		if err := rows.Scan(&obj.Name, &obj.Comment, &obj.CreatedAt, &obj.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan trigger failed: %w", err)
+		}
+		obj.Type = objectType
+		obj.Schema = schema
+		objects = append(objects, obj)
+	}
+	if objects == nil {
+		objects = []DBObject{}
+	}
+
+	return &ListResult{Objects: objects, Total: total, Page: opts.Page, PageSize: opts.PageSize}, nil
+}
+
+func (d *SQLiteDriver) GetObjectDefinition(schema, objectType, objectName string) (string, error) {
+	if objectType != ObjectTypeTrigger {
+		return "", fmt.Errorf("unsupported object type: %s", objectType)
+	}
+
+	var sql string
+	err := d.db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?`, objectName).Scan(&sql)
+	if err != nil {
+		return "", fmt.Errorf("get trigger definition failed: %w", err)
+	}
+	if sql == "" {
+		return "", fmt.Errorf("trigger definition is empty")
+	}
+	return sql + ";", nil
+}
+
+func (d *SQLiteDriver) GetObjectDetail(schema, objectType, objectName string) (map[string]interface{}, error) {
+	if objectType != ObjectTypeTrigger {
+		return nil, fmt.Errorf("unsupported object type: %s", objectType)
+	}
+
+	detail := make(map[string]interface{})
+	detail["name"] = objectName
+	detail["type"] = objectType
+	detail["schema"] = schema
+
+	var tblName, sql string
+	err := d.db.QueryRow(`SELECT tbl_name, sql FROM sqlite_master WHERE type='trigger' AND name=?`, objectName).Scan(&tblName, &sql)
+	if err != nil {
+		return nil, fmt.Errorf("get trigger detail failed: %w", err)
+	}
+	detail["table_name"] = tblName
+	detail["definition"] = sql
+
+	return detail, nil
+}
+
+func (d *SQLiteDriver) CheckDependencies(schema, objectType, objectName string) ([]DependencyInfo, error) {
+	return nil, fmt.Errorf("dependency check not supported for SQLite")
+}
+
+func (d *SQLiteDriver) ExecuteObjectDDL(schema, objectType, ddl string) (string, error) {
+	if objectType != ObjectTypeTrigger {
+		return "", fmt.Errorf("unsupported object type: %s", objectType)
+	}
+
+	_, err := d.db.Exec(ddl)
+	if err != nil {
+		return "", fmt.Errorf("execute DDL failed: %w", err)
+	}
+	return "DDL executed successfully", nil
+}
+
+func (d *SQLiteDriver) GenerateCreateTemplate(objectType, schema, objectName string) (string, error) {
+	if objectType != ObjectTypeTrigger {
+		return "", fmt.Errorf("unsupported object type: %s", objectType)
+	}
+
+	return fmt.Sprintf(`CREATE TRIGGER IF NOT EXISTS "%s"
+-- BEFORE|AFTER INSERT|UPDATE|DELETE
+-- ON table_name
+-- FOR EACH ROW
+-- BEGIN
+--     -- trigger logic here
+-- END;
+`, objectName), nil
+}
+
+func (d *SQLiteDriver) GenerateAlterDDL(schema, objectType, name, newDef string) ([]string, error) {
+	if objectType != ObjectTypeTrigger {
+		return nil, fmt.Errorf("unsupported object type: %s", objectType)
+	}
+
+	// SQLite doesn't support ALTER TRIGGER, need to drop and recreate
+	dropSQL := fmt.Sprintf(`DROP TRIGGER IF EXISTS "%s";`, name)
+	return []string{dropSQL, newDef}, nil
+}
+
+func (d *SQLiteDriver) GenerateDropDDL(schema, objectType, name string) (string, error) {
+	if objectType != ObjectTypeTrigger {
+		return "", fmt.Errorf("unsupported object type: %s", objectType)
+	}
+
+	return fmt.Sprintf(`DROP TRIGGER IF EXISTS "%s";`, name), nil
 }

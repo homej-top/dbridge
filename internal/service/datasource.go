@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -382,6 +384,7 @@ func (s *DataSourceService) Delete(id, tenantID string) error {
 	if ds.IsSystem {
 		return ErrSystemDataSourceProtected
 	}
+	drivers.TunnelMgr().ReleaseTunnel(ds.ID)
 	return s.db.Where("id = ?", ds.ID).Delete(&repository.DataSource{}).Error
 }
 
@@ -448,16 +451,124 @@ func (s *DataSourceService) connectDB(id string) (*sql.DB, *repository.DataSourc
 // connectDriver creates a DatabaseDriver for the given data source ID.
 // The caller is responsible for closing the driver.
 // Connect creates a driver connection for server management operations
-func (s *DataSourceService) Connect(id string) (drivers.DatabaseDriver, *repository.DataSource, error) {
+func (s *DataSourceService) Connect(id string) (drivers.DatabaseDriver, *sql.DB, *repository.DataSource, error) {
 	return s.connectDriver(id)
 }
 
 // ConnectForDB connects to a specific database on the data source
 func (s *DataSourceService) ConnectForDB(id, database string) (drivers.DatabaseDriver, error) {
-	return s.connectDriverForDB(id, database)
+	driver, _, err := s.connectDriverForDB(id, database)
+	return driver, err
 }
 
-func (s *DataSourceService) connectDriver(id string) (drivers.DatabaseDriver, *repository.DataSource, error) {
+func (s *DataSourceService) connectDriver(id string) (drivers.DatabaseDriver, *sql.DB, *repository.DataSource, error) {
+	var ds repository.DataSource
+	if err := s.db.Where("id = ?", id).First(&ds).Error; err != nil {
+		return nil, nil, nil, fmt.Errorf("data source not found")
+	}
+
+	pwd, err := cryptoPkg.Decrypt(ds.Password)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to decrypt password")
+	}
+
+	if !isSupportedDBType(ds.Type) {
+		return nil, nil, nil, fmt.Errorf("unsupported database type: %s", ds.Type)
+	}
+
+	driver, db, err := s.buildDriver(ds, pwd)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	return driver, db, &ds, nil
+}
+
+// buildDriver creates a DatabaseDriver from a data source record and decrypted password.
+func (s *DataSourceService) buildDriver(ds repository.DataSource, pwd string) (drivers.DatabaseDriver, *sql.DB, error) {
+	cfg := drivers.DriverConfig{
+		Host:           ds.Host,
+		Port:           ds.Port,
+		Username:       ds.Username,
+		Password:       pwd,
+		Database:       ds.Database,
+		MaxConnections: 10,
+	}
+
+	if ds.ExtraConfig != "" {
+		var extra map[string]interface{}
+		if json.Unmarshal([]byte(ds.ExtraConfig), &extra) == nil {
+			if v, ok := extra["oracle_service"].(string); ok {
+				cfg.OracleService = v
+			}
+			if v, ok := extra["connect_mode"].(string); ok {
+				cfg.OracleConnectMode = v
+			}
+			if v, ok := extra["role"].(string); ok {
+				cfg.OracleRole = v
+			}
+			if v, ok := extra["ssh_host"].(string); ok {
+				cfg.SSHHost = v
+			}
+			if v, ok := extra["ssh_port"].(float64); ok {
+				cfg.SSHPort = int(v)
+			}
+			if v, ok := extra["ssh_username"].(string); ok {
+				cfg.SSHUsername = v
+			}
+			if v, ok := extra["ssh_password"].(string); ok {
+				cfg.SSHPassword = v
+			}
+			if v, ok := extra["ssh_key"].(string); ok {
+				cfg.SSHKey = v
+			}
+			if v, ok := extra["ssh_key_passphrase"].(string); ok {
+				cfg.SSHKeyPassphrase = v
+			}
+			if v, ok := extra["ssl_cert"].(string); ok {
+				cfg.SSLCert = v
+			}
+			if v, ok := extra["ssl_key"].(string); ok {
+				cfg.SSLKey = v
+			}
+			if v, ok := extra["ssl_root_cert"].(string); ok {
+				cfg.SSLRootCert = v
+			}
+			if v, ok := extra["connect_timeout"].(float64); ok {
+				cfg.ConnectTimeout = int(v)
+			}
+			if v, ok := extra["query_timeout"].(float64); ok {
+				cfg.QueryTimeout = int(v)
+			}
+		}
+	}
+
+	if cfg.SSHHost != "" && cfg.SSHUsername != "" {
+		tunnel, err := drivers.TunnelMgr().AcquireTunnel(ds.ID, cfg)
+		if err != nil {
+			return nil, nil, fmt.Errorf("SSH tunnel failed: %w", err)
+		}
+		host, port, err := net.SplitHostPort(tunnel.LocalAddr())
+		if err != nil {
+			drivers.TunnelMgr().ReleaseTunnel(ds.ID)
+			return nil, nil, fmt.Errorf("failed to parse tunnel address: %w", err)
+		}
+		cfg.Host = host
+		cfg.Port, _ = strconv.Atoi(port)
+		cfg.SSHHost = ""
+		cfg.SSHUsername = ""
+		cfg.SSHPassword = ""
+		cfg.SSHKey = ""
+		cfg.SSHKeyPassphrase = ""
+	}
+
+	return drivers.CreateDriver(ds.Type, cfg)
+}
+
+// connectDriverForDB creates a DatabaseDriver connected to a specific database.
+// Used when the tree has database → schema hierarchy (PG/MSSQL) and the
+// schema is within a different database than the data source's default.
+func (s *DataSourceService) connectDriverForDB(id, database string) (drivers.DatabaseDriver, *sql.DB, error) {
 	var ds repository.DataSource
 	if err := s.db.Where("id = ?", id).First(&ds).Error; err != nil {
 		return nil, nil, fmt.Errorf("data source not found")
@@ -472,62 +583,6 @@ func (s *DataSourceService) connectDriver(id string) (drivers.DatabaseDriver, *r
 		return nil, nil, fmt.Errorf("unsupported database type: %s", ds.Type)
 	}
 
-	driver, _, err := s.buildDriver(ds, pwd)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return driver, &ds, nil
-}
-
-// buildDriver creates a DatabaseDriver from a data source record and decrypted password.
-func (s *DataSourceService) buildDriver(ds repository.DataSource, pwd string) (drivers.DatabaseDriver, *sql.DB, error) {
-	cfg := drivers.DriverConfig{
-		Host:           ds.Host,
-		Port:           ds.Port,
-		Username:       ds.Username,
-		Password:       pwd,
-		Database:       ds.Database,
-		MaxConnections: 10,
-	}
-
-	// Parse Oracle-specific extra config
-	if ds.Type == "oracle" && ds.ExtraConfig != "" {
-		var extra map[string]string
-		if json.Unmarshal([]byte(ds.ExtraConfig), &extra) == nil {
-			if v, ok := extra["oracle_service"]; ok {
-				cfg.OracleService = v
-			}
-			if v, ok := extra["connect_mode"]; ok {
-				cfg.OracleConnectMode = v
-			}
-			if v, ok := extra["role"]; ok {
-				cfg.OracleRole = v
-			}
-		}
-	}
-
-	return drivers.CreateDriver(ds.Type, cfg)
-}
-
-// connectDriverForDB creates a DatabaseDriver connected to a specific database.
-// Used when the tree has database → schema hierarchy (PG/MSSQL) and the
-// schema is within a different database than the data source's default.
-func (s *DataSourceService) connectDriverForDB(id, database string) (drivers.DatabaseDriver, error) {
-	var ds repository.DataSource
-	if err := s.db.Where("id = ?", id).First(&ds).Error; err != nil {
-		return nil, fmt.Errorf("data source not found")
-	}
-
-	pwd, err := cryptoPkg.Decrypt(ds.Password)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decrypt password")
-	}
-
-	if !isSupportedDBType(ds.Type) {
-		return nil, fmt.Errorf("unsupported database type: %s", ds.Type)
-	}
-
 	// Override the database in the config
 	cfg := drivers.DriverConfig{
 		Host:           ds.Host,
@@ -538,24 +593,60 @@ func (s *DataSourceService) connectDriverForDB(id, database string) (drivers.Dat
 		MaxConnections: 10,
 	}
 
-	// Parse Oracle-specific extra config
-	if ds.Type == "oracle" && ds.ExtraConfig != "" {
-		var extra map[string]string
+	if ds.ExtraConfig != "" {
+		var extra map[string]interface{}
 		if json.Unmarshal([]byte(ds.ExtraConfig), &extra) == nil {
-			if v, ok := extra["oracle_service"]; ok {
+			if v, ok := extra["oracle_service"].(string); ok {
 				cfg.OracleService = v
 			}
-			if v, ok := extra["connect_mode"]; ok {
+			if v, ok := extra["connect_mode"].(string); ok {
 				cfg.OracleConnectMode = v
 			}
-			if v, ok := extra["role"]; ok {
+			if v, ok := extra["role"].(string); ok {
 				cfg.OracleRole = v
+			}
+			if v, ok := extra["ssh_host"].(string); ok {
+				cfg.SSHHost = v
+			}
+			if v, ok := extra["ssh_port"].(float64); ok {
+				cfg.SSHPort = int(v)
+			}
+			if v, ok := extra["ssh_username"].(string); ok {
+				cfg.SSHUsername = v
+			}
+			if v, ok := extra["ssh_password"].(string); ok {
+				cfg.SSHPassword = v
+			}
+			if v, ok := extra["ssh_key"].(string); ok {
+				cfg.SSHKey = v
+			}
+			if v, ok := extra["ssh_key_passphrase"].(string); ok {
+				cfg.SSHKeyPassphrase = v
 			}
 		}
 	}
 
-	driver, _, err := drivers.CreateDriver(ds.Type, cfg)
-	return driver, err
+	if cfg.SSHHost != "" && cfg.SSHUsername != "" {
+		tunnel, err := drivers.TunnelMgr().AcquireTunnel(ds.ID, cfg)
+		if err != nil {
+			return nil, nil, fmt.Errorf("SSH tunnel failed: %w", err)
+		}
+		host, port, err := net.SplitHostPort(tunnel.LocalAddr())
+		if err != nil {
+			drivers.TunnelMgr().ReleaseTunnel(ds.ID)
+			return nil, nil, fmt.Errorf("failed to parse tunnel address: %w", err)
+		}
+		cfg.Host = host
+		cfg.Port, _ = strconv.Atoi(port)
+		cfg.SSHHost = ""
+		cfg.SSHUsername = ""
+		cfg.SSHPassword = ""
+		cfg.SSHKey = ""
+		cfg.SSHKeyPassphrase = ""
+	}
+
+	driver, db, err := drivers.CreateDriver(ds.Type, cfg)
+	return driver, db, err
 }
 
 // openDBConnection is a thin wrapper for backward compatibility
@@ -565,7 +656,7 @@ func (s *DataSourceService) openDBConnection(ds repository.DataSource, pwd strin
 
 // ListSchemaNames returns only the schema/database names for a data source (no tables/views)
 func (s *DataSourceService) ListSchemaNames(id string) ([]string, error) {
-	driver, ds, err := s.connectDriver(id)
+	driver, _, ds, err := s.connectDriver(id)
 	if err != nil {
 		return nil, err
 	}
@@ -582,7 +673,7 @@ func (s *DataSourceService) ListSchemaNames(id string) ([]string, error) {
 
 // GetSchemaObjects returns tables and views for a single schema (no columns)
 func (s *DataSourceService) GetSchemaObjects(id string, schemaName string) (*drivers.SchemaInfo, error) {
-	driver, _, err := s.connectDriver(id)
+	driver, _, _, err := s.connectDriver(id)
 	if err != nil {
 		return nil, err
 	}
@@ -687,7 +778,7 @@ func (s *DataSourceService) ImportDataSources(tenantID, createdBy string, items 
 
 // GetSchema connects to the user data source and returns schema metadata
 func (s *DataSourceService) GetSchema(id string) ([]drivers.SchemaInfo, error) {
-	driver, _, err := s.connectDriver(id)
+	driver, _, _, err := s.connectDriver(id)
 	if err != nil {
 		return nil, err
 	}
@@ -698,7 +789,7 @@ func (s *DataSourceService) GetSchema(id string) ([]drivers.SchemaInfo, error) {
 
 // SchemaDetailList returns a summary list of schemas with table/view counts (no nested objects)
 func (s *DataSourceService) SchemaDetailList(id string) ([]drivers.SchemaDetailItem, error) {
-	driver, _, err := s.connectDriver(id)
+	driver, _, _, err := s.connectDriver(id)
 	if err != nil {
 		return nil, err
 	}
@@ -710,7 +801,7 @@ func (s *DataSourceService) SchemaDetailList(id string) ([]drivers.SchemaDetailI
 // TableList returns tables and views for a given schema with metadata
 func (s *DataSourceService) TableList(id string, schemaName string, database string) ([]drivers.TableListItem, error) {
 	if database != "" {
-		driver, err := s.connectDriverForDB(id, database)
+		driver, _, err := s.connectDriverForDB(id, database)
 		if err != nil {
 			return nil, err
 		}
@@ -718,7 +809,7 @@ func (s *DataSourceService) TableList(id string, schemaName string, database str
 		return driver.ListTables(schemaName)
 	}
 
-	driver, _, err := s.connectDriver(id)
+	driver, _, _, err := s.connectDriver(id)
 	if err != nil {
 		return nil, err
 	}
@@ -729,7 +820,7 @@ func (s *DataSourceService) TableList(id string, schemaName string, database str
 
 // GetDDL retrieves the CREATE TABLE/VIEW DDL for the given table
 func (s *DataSourceService) GetDDL(id string, schemaName, tableName string) (string, error) {
-	driver, _, err := s.connectDriver(id)
+	driver, _, _, err := s.connectDriver(id)
 	if err != nil {
 		return "", err
 	}
@@ -758,10 +849,17 @@ func withStaticDriver[T any](dbType string, fn func(drivers.DatabaseDriver) T) T
 }
 
 // getTreeMetadataForDB returns the tree metadata for a given database type (no connection needed).
+var treeMetadataCache sync.Map
+
 func getTreeMetadataForDB(dbType string) drivers.TreeMetadata {
-	return withStaticDriver(dbType, func(d drivers.DatabaseDriver) drivers.TreeMetadata {
+	if cached, ok := treeMetadataCache.Load(dbType); ok {
+		return cached.(drivers.TreeMetadata)
+	}
+	meta := withStaticDriver(dbType, func(d drivers.DatabaseDriver) drivers.TreeMetadata {
 		return d.GetTreeMetadata()
 	})
+	treeMetadataCache.Store(dbType, meta)
+	return meta
 }
 
 // resolveContextForDB resolves a schema-like string into the correct DatabaseContext for a given DB type.
@@ -815,7 +913,7 @@ func (s *DataSourceService) GetTreeMetadata(id string) (drivers.TreeMetadata, er
 
 // ListDatabases returns database list with metadata
 func (s *DataSourceService) ListDatabases(id string) ([]drivers.DatabaseInfo, error) {
-	driver, _, err := s.connectDriver(id)
+	driver, _, _, err := s.connectDriver(id)
 	if err != nil {
 		return nil, err
 	}
@@ -835,13 +933,270 @@ func (s *DataSourceService) ResolveContext(id, arg string) (drivers.DatabaseCont
 
 // ListDatabaseSchemas returns schema names within a specific database (PG/MSSQL).
 func (s *DataSourceService) ListDatabaseSchemas(id, database string) ([]string, error) {
-	driver, _, err := s.connectDriver(id)
+	driver, _, _, err := s.connectDriver(id)
 	if err != nil {
 		return nil, err
 	}
 	defer driver.Close()
 
 	return driver.ListDatabaseSchemas(database)
+}
+
+// ─── Database Object Management ─────────────────────────────────────────
+
+func (s *DataSourceService) GetSupportedObjectTypes(id string) ([]string, error) {
+	var ds repository.DataSource
+	if err := s.db.Where("id = ?", id).First(&ds).Error; err != nil {
+		return nil, err
+	}
+	return withStaticDriver(ds.Type, func(d drivers.DatabaseDriver) []string {
+		return d.SupportedObjectTypes()
+	}), nil
+}
+
+func (s *DataSourceService) ListObjectsByType(id, schema, objectType string, opts drivers.ListOptions) (*drivers.ListResult, error) {
+	var driver drivers.DatabaseDriver
+	var err error
+	
+	// If database is specified, connect to that specific database
+	if opts.Database != "" {
+		driver, _, err = s.connectDriverForDB(id, opts.Database)
+		if err != nil {
+			return nil, fmt.Errorf("failed to connect to database %s: %w", opts.Database, err)
+		}
+		defer driver.Close()
+	} else {
+		// Use default connection
+		var db *sql.DB
+		var ds *repository.DataSource
+		driver, db, ds, err = s.connectDriver(id)
+		if err != nil {
+			return nil, err
+		}
+		defer driver.Close()
+		_ = db
+		_ = ds
+	}
+	
+	return driver.ListObjectsByType(schema, objectType, opts)
+}
+
+func (s *DataSourceService) GetObjectDetail(id, schema, objectType, objectName string) (map[string]interface{}, error) {
+	return s.GetObjectDetailForDB(id, schema, objectType, objectName, "")
+}
+
+func (s *DataSourceService) GetObjectDetailForDB(id, schema, objectType, objectName, database string) (map[string]interface{}, error) {
+	var driver drivers.DatabaseDriver
+	var err error
+	
+	if database != "" {
+		driver, _, err = s.connectDriverForDB(id, database)
+	} else {
+		driver, _, _, err = s.connectDriver(id)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer driver.Close()
+
+	detail, err := driver.GetObjectDetail(schema, objectType, objectName)
+	if err != nil {
+		return nil, err
+	}
+
+	definition, defErr := driver.GetObjectDefinition(schema, objectType, objectName)
+	detail["definition"] = definition
+	if defErr != nil {
+		detail["definition_error"] = defErr.Error()
+	}
+	return detail, nil
+}
+
+func (s *DataSourceService) CreateObject(id, schema, objectType, ddl string) (string, error) {
+	return s.CreateObjectForDB(id, schema, objectType, ddl, "")
+}
+
+func (s *DataSourceService) CreateObjectForDB(id, schema, objectType, ddl, database string) (string, error) {
+	var driver drivers.DatabaseDriver
+	var err error
+	
+	if database != "" {
+		driver, _, err = s.connectDriverForDB(id, database)
+	} else {
+		driver, _, _, err = s.connectDriver(id)
+	}
+	if err != nil {
+		return "", err
+	}
+	defer driver.Close()
+	
+	return driver.ExecuteObjectDDL(schema, objectType, ddl)
+}
+
+func (s *DataSourceService) AlterObject(id, schema, objectType, name, definition string) ([]string, int, error) {
+	return s.AlterObjectForDB(id, schema, objectType, name, definition, "")
+}
+
+func (s *DataSourceService) AlterObjectForDB(id, schema, objectType, name, definition, database string) ([]string, int, error) {
+	var driver drivers.DatabaseDriver
+	var db *sql.DB
+	var ds *repository.DataSource
+	var err error
+	
+	if database != "" {
+		driver, db, err = s.connectDriverForDB(id, database)
+		if err != nil {
+			return nil, 0, err
+		}
+		// Fetch the DataSource to check type for transaction handling
+		var dataSource repository.DataSource
+		if fetchErr := s.db.Where("id = ?", id).First(&dataSource).Error; fetchErr == nil {
+			ds = &dataSource
+		}
+	} else {
+		driver, db, ds, err = s.connectDriver(id)
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	defer driver.Close()
+
+	ddls, err := driver.GenerateAlterDDL(schema, objectType, name, drivers.StripDelimiter(definition))
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if len(ddls) == 0 {
+		return ddls, 0, nil
+	}
+
+	// MySQL DDL auto-commits, so transactions don't help. Execute sequentially.
+	if ds.Type == "mysql" || ds.Type == "mariadb" || ds.Type == "oceanbase" {
+		for _, ddl := range ddls {
+			if _, err := driver.ExecuteObjectDDL(schema, objectType, ddl); err != nil {
+				return ddls, 0, fmt.Errorf("DDL execution failed: %w\nSQL: %s", err, ddl)
+			}
+		}
+		return ddls, len(ddls), nil
+	}
+
+	// PG/Oracle/SQL Server: wrap in a transaction
+	tx, err := db.Begin()
+	if err != nil {
+		return ddls, 0, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	for _, ddl := range ddls {
+		if _, err := tx.Exec(ddl); err != nil {
+			_ = tx.Rollback()
+			return ddls, 0, fmt.Errorf("DDL execution failed: %w\nSQL: %s", err, ddl)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return ddls, 0, fmt.Errorf("transaction commit failed: %w", err)
+	}
+	return ddls, len(ddls), nil
+}
+
+func (s *DataSourceService) DropObject(id, schema, objectType, name string, force bool) error {
+	return s.DropObjectForDB(id, schema, objectType, name, force, "")
+}
+
+func (s *DataSourceService) DropObjectForDB(id, schema, objectType, name string, force bool, database string) error {
+	var driver drivers.DatabaseDriver
+	var err error
+	
+	if database != "" {
+		driver, _, err = s.connectDriverForDB(id, database)
+	} else {
+		driver, _, _, err = s.connectDriver(id)
+	}
+	if err != nil {
+		return err
+	}
+	defer driver.Close()
+
+	if !force {
+		deps, err := driver.CheckDependencies(schema, objectType, name)
+		if err != nil {
+			return err
+		}
+		if len(deps) > 0 {
+			return &DependencyWarning{Dependencies: deps}
+		}
+	}
+
+	dropDDL, err := driver.GenerateDropDDL(schema, objectType, name)
+	if err != nil {
+		return err
+	}
+	_, err = driver.ExecuteObjectDDL(schema, objectType, dropDDL)
+	return err
+}
+
+// RefreshMatViewForDB refreshes a materialized view with the specified mode
+func (s *DataSourceService) RefreshMatViewForDB(id, schema, name, mode, database string) error {
+	var driver drivers.DatabaseDriver
+	var err error
+
+	if database != "" {
+		driver, _, err = s.connectDriverForDB(id, database)
+	} else {
+		driver, _, _, err = s.connectDriver(id)
+	}
+	if err != nil {
+		return err
+	}
+	defer driver.Close()
+
+	// Build the REFRESH SQL based on mode
+	var sql string
+	qualified := fmt.Sprintf(`"%s"."%s"`, schema, name)
+	switch mode {
+	case "normal":
+		sql = fmt.Sprintf("REFRESH MATERIALIZED VIEW %s", qualified)
+	case "concurrently":
+		sql = fmt.Sprintf("REFRESH MATERIALIZED VIEW CONCURRENTLY %s", qualified)
+	case "with-no-data":
+		sql = fmt.Sprintf("REFRESH MATERIALIZED VIEW %s WITH NO DATA", qualified)
+	default:
+		return fmt.Errorf("invalid refresh mode: %s", mode)
+	}
+
+	_, err = driver.ExecuteObjectDDL(schema, "matview", sql)
+	if err != nil && mode == "concurrently" {
+		// Check if it's the "cannot refresh concurrently" error (needs unique index)
+		if strings.Contains(err.Error(), "cannot refresh") || strings.Contains(err.Error(), "55000") {
+			return fmt.Errorf("并发刷新失败：物化视图上必须存在至少一个唯一索引（UNIQUE INDEX）。请先创建唯一索引，或使用普通刷新模式")
+		}
+	}
+	return err
+}
+
+func (s *DataSourceService) GetCreateTemplate(id, schema, objectType, objectName string) (string, error) {
+	driver, _, _, err := s.connectDriver(id)
+	if err != nil {
+		return "", err
+	}
+	defer driver.Close()
+	return driver.GenerateCreateTemplate(objectType, schema, objectName)
+}
+
+func (s *DataSourceService) CheckDependencies(id, schema, objectType, name string) ([]drivers.DependencyInfo, error) {
+	driver, _, _, err := s.connectDriver(id)
+	if err != nil {
+		return nil, err
+	}
+	defer driver.Close()
+	return driver.CheckDependencies(schema, objectType, name)
+}
+
+// DependencyWarning is returned when an object has dependencies and force=false
+type DependencyWarning struct {
+	Dependencies []drivers.DependencyInfo
+}
+
+func (e *DependencyWarning) Error() string {
+	return fmt.Sprintf("object has %d dependencies", len(e.Dependencies))
 }
 
 

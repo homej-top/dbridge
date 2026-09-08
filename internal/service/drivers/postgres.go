@@ -13,9 +13,10 @@ import (
 
 // PostgresDriver implements DatabaseDriver for PostgreSQL
 type PostgresDriver struct {
-	db     *sql.DB
-	cfg    DriverConfig
-	pooled bool
+	db        *sql.DB
+	cfg       DriverConfig
+	pooled    bool
+	pgVersion int
 }
 
 func NewPostgresDriver(cfg DriverConfig) (DatabaseDriver, *sql.DB, error) {
@@ -50,7 +51,13 @@ func NewPostgresDriver(cfg DriverConfig) (DatabaseDriver, *sql.DB, error) {
 		}
 	}
 
-	return &PostgresDriver{db: db, cfg: cfg, pooled: cfg.DB != nil}, db, nil
+	drv := &PostgresDriver{db: db, cfg: cfg, pooled: cfg.DB != nil}
+	drv.initVersion()
+	return drv, db, nil
+}
+
+func (d *PostgresDriver) initVersion() {
+	_ = d.db.QueryRow("SHOW server_version_num").Scan(&d.pgVersion)
 }
 
 func (d *PostgresDriver) Ping() error     { return d.db.Ping() }
@@ -189,7 +196,10 @@ func (d *PostgresDriver) ListTables(schema string) ([]TableListItem, error) {
 	FROM information_schema.tables t
 	LEFT JOIN pg_class c ON c.relname = t.table_name
 		AND c.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = t.table_schema)
-	WHERE t.table_schema = $1 ORDER BY t.table_name`, schema)
+	WHERE t.table_schema = $1 
+		AND t.table_name NOT LIKE 'pg_%'
+		AND t.table_name NOT LIKE 'sql_%'
+	ORDER BY t.table_name`, schema)
 	if err != nil {
 		return nil, err
 	}
@@ -543,7 +553,7 @@ func (d *PostgresDriver) GetConstraints(schema, table string) ([]map[string]inte
 func (d *PostgresDriver) GetFullStructure(schema, table string) (*FullStructure, error) {
 	result := &FullStructure{}
 
-	// Detect view
+	// Detect view or materialized view
 	var relkind string
 	err := d.db.QueryRow(`
 		SELECT c.relkind FROM pg_class c
@@ -560,6 +570,14 @@ func (d *PostgresDriver) GetFullStructure(schema, table string) (*FullStructure,
 			result.DDL = fmt.Sprintf("CREATE VIEW %s AS\n%s", quotePGTable(schema, table), ddl.String)
 		}
 		// Views have columns — continue to query them below
+	} else if relkind == "m" {
+		// Materialized view
+		result.IsView = true
+		var ddl sql.NullString
+		d.db.QueryRow(`SELECT pg_get_viewdef(c.oid, true) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = $2`, schema, table).Scan(&ddl)
+		if ddl.Valid {
+			result.DDL = fmt.Sprintf("CREATE MATERIALIZED VIEW %s AS\n%s", quotePGTable(schema, table), ddl.String)
+		}
 	}
 
 	// Columns
@@ -1007,11 +1025,18 @@ func (d *PostgresDriver) GetTreeMetadata() TreeMetadata {
 			{Key: "schema", Label: "Schema", LabelKey: "tree.schema", PlaceholderKey: "tree.schema_name_hint", Icon: "ClusterOutlined"},
 			{Key: "tables_folder", Label: "Tables", LabelKey: "tree.tables", Icon: "TableOutlined"},
 			{Key: "views_folder", Label: "Views", LabelKey: "tree.views", Icon: "EyeOutlined"},
+			{Key: "procedure_folder", Label: "Procedures", LabelKey: "tree.procedures", Icon: "CodeOutlined"},
+			{Key: "function_folder", Label: "Functions", LabelKey: "tree.functions", Icon: "FunctionOutlined"},
+			{Key: "sequence_folder", Label: "Sequences", LabelKey: "tree.sequences", Icon: "NumberOutlined"},
+			{Key: "type_folder", Label: "Types", LabelKey: "tree.types", Icon: "BlockOutlined"},
+			{Key: "matview_folder", Label: "Materialized Views", LabelKey: "tree.matviews", Icon: "TableOutlined"},
+			{Key: "trigger_folder", Label: "Triggers", LabelKey: "tree.triggers", Icon: "ThunderboltOutlined"},
 		},
 		AllowCreate: map[string]bool{"database": true, "schema": true},
 		SystemFilter: &SystemFilter{
 			ExcludeNames: []string{"pg_catalog", "information_schema", "pg_toast"},
 		},
+		SupportedObjectTypes: []string{ObjectTypeProcedure, ObjectTypeFunction, ObjectTypeSequence, ObjectTypeType, ObjectTypeMatView, ObjectTypeTrigger},
 	}
 }
 
@@ -1646,4 +1671,659 @@ func (d *PostgresDriver) SQLIsNull(col, defaultVal string) string {
 }
 func (d *PostgresDriver) SQLCurrentTimestamp() string { return "NOW()" }
 func (d *PostgresDriver) SQLQuoteIdent(name string) string { return `"` + name + `"` }
+
+// ─── Database Object Management ─────────────────────────────────────────
+
+func (d *PostgresDriver) SupportedObjectTypes() []string {
+	return []string{ObjectTypeProcedure, ObjectTypeFunction, ObjectTypeSequence, ObjectTypeType, ObjectTypeMatView}
+}
+
+func (d *PostgresDriver) ListObjectsByType(schema, objectType string, opts ListOptions) (*ListResult, error) {
+	keyword := "%" + opts.Keyword + "%"
+	offset := (opts.Page - 1) * opts.PageSize
+
+	var countSQL, dataSQL string
+	var countArgs, dataArgs []interface{}
+
+	switch objectType {
+	case ObjectTypeMatView:
+		countSQL = `SELECT COUNT(*) FROM pg_matviews WHERE schemaname=$1 AND ($2='' OR matviewname LIKE $2)`
+		countArgs = []interface{}{schema, keyword}
+		dataSQL = `SELECT matviewname, COALESCE(CASE WHEN ispopulated THEN 'populated' ELSE 'unpopulated' END,''), '' , ''
+			FROM pg_matviews WHERE schemaname=$1 AND ($2='' OR matviewname LIKE $2)
+			ORDER BY matviewname LIMIT $3 OFFSET $4`
+		dataArgs = []interface{}{schema, keyword, opts.PageSize, offset}
+	case ObjectTypeProcedure:
+		if d.pgVersion < 110000 {
+			return &ListResult{Objects: []DBObject{}, Total: 0, Page: opts.Page, PageSize: opts.PageSize}, nil
+		}
+		countSQL = `SELECT COUNT(DISTINCT p.proname) FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
+			WHERE n.nspname=$1 AND p.prokind='p' AND p.proname NOT LIKE 'pg_%' AND p.proname NOT LIKE 'sql_%' AND ($2='' OR p.proname LIKE $2)`
+		countArgs = []interface{}{schema, keyword}
+		dataSQL = `SELECT DISTINCT p.proname, n.nspname, COALESCE(d.description,''), ''
+			FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
+			LEFT JOIN pg_description d ON d.objoid=p.oid AND d.objsubid=0
+			WHERE n.nspname=$1 AND p.prokind='p' AND p.proname NOT LIKE 'pg_%' AND p.proname NOT LIKE 'sql_%' AND ($2='' OR p.proname LIKE $2)
+			ORDER BY p.proname LIMIT $3 OFFSET $4`
+		dataArgs = []interface{}{schema, keyword, opts.PageSize, offset}
+	case ObjectTypeFunction:
+		if d.pgVersion < 110000 {
+			countSQL = `SELECT COUNT(DISTINCT p.proname) FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
+				WHERE n.nspname=$1 AND NOT p.proisagg AND p.proname NOT LIKE 'pg_%' AND p.proname NOT LIKE 'sql_%' AND ($2='' OR p.proname LIKE $2)`
+			countArgs = []interface{}{schema, keyword}
+			dataSQL = `SELECT DISTINCT p.proname, n.nspname, COALESCE(d.description,''), ''
+				FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
+				LEFT JOIN pg_description d ON d.objoid=p.oid AND d.objsubid=0
+				WHERE n.nspname=$1 AND NOT p.proisagg AND p.proname NOT LIKE 'pg_%' AND p.proname NOT LIKE 'sql_%' AND ($2='' OR p.proname LIKE $2)
+				ORDER BY p.proname LIMIT $3 OFFSET $4`
+			dataArgs = []interface{}{schema, keyword, opts.PageSize, offset}
+		} else {
+			countSQL = `SELECT COUNT(DISTINCT p.proname) FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
+				WHERE n.nspname=$1 AND p.prokind='f' AND p.proname NOT LIKE 'pg_%' AND p.proname NOT LIKE 'sql_%' AND ($2='' OR p.proname LIKE $2)`
+			countArgs = []interface{}{schema, keyword}
+			dataSQL = `SELECT DISTINCT p.proname, n.nspname, COALESCE(d.description,''), ''
+				FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
+				LEFT JOIN pg_description d ON d.objoid=p.oid AND d.objsubid=0
+				WHERE n.nspname=$1 AND p.prokind='f' AND p.proname NOT LIKE 'pg_%' AND p.proname NOT LIKE 'sql_%' AND ($2='' OR p.proname LIKE $2)
+				ORDER BY p.proname LIMIT $3 OFFSET $4`
+			dataArgs = []interface{}{schema, keyword, opts.PageSize, offset}
+		}
+	case ObjectTypeSequence:
+		countSQL = `SELECT COUNT(*) FROM information_schema.sequences
+			WHERE sequence_schema=$1 AND ($2='' OR sequence_name LIKE $2)`
+		countArgs = []interface{}{schema, keyword}
+		dataSQL = `SELECT sequence_name, data_type, '', ''
+			FROM information_schema.sequences
+			WHERE sequence_schema=$1 AND ($2='' OR sequence_name LIKE $2)
+			ORDER BY sequence_name LIMIT $3 OFFSET $4`
+		dataArgs = []interface{}{schema, keyword, opts.PageSize, offset}
+	case ObjectTypeType:
+		countSQL = `SELECT COUNT(*) FROM pg_type t JOIN pg_namespace n ON t.typnamespace=n.oid
+			WHERE n.nspname=$1 AND t.typtype IN ('c','d','e','r','m')
+			AND n.nspname NOT IN ('pg_catalog','information_schema','pg_toast')
+			AND NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.reltype = t.oid AND c.relkind IN ('r','p'))
+			AND ($2='' OR t.typname LIKE $2)`
+		countArgs = []interface{}{schema, keyword}
+		dataSQL = `SELECT t.typname,
+			CASE t.typtype WHEN 'c' THEN 'composite' WHEN 'd' THEN 'domain' WHEN 'e' THEN 'enum' WHEN 'r' THEN 'range' WHEN 'm' THEN 'multirange' END,
+			COALESCE(pg_catalog.obj_description(t.oid),''), ''
+			FROM pg_type t JOIN pg_namespace n ON t.typnamespace=n.oid
+			WHERE n.nspname=$1 AND t.typtype IN ('c','d','e','r','m')
+			AND n.nspname NOT IN ('pg_catalog','information_schema','pg_toast')
+			AND NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.reltype = t.oid AND c.relkind IN ('r','p'))
+			AND ($2='' OR t.typname LIKE $2)
+			ORDER BY t.typname LIMIT $3 OFFSET $4`
+		dataArgs = []interface{}{schema, keyword, opts.PageSize, offset}
+	case ObjectTypeTrigger:
+		countSQL = `SELECT COUNT(*) FROM pg_trigger t JOIN pg_class c ON t.tgrelid=c.oid JOIN pg_namespace n ON c.relnamespace=n.oid
+			WHERE n.nspname=$1 AND NOT t.tgisinternal AND ($2='' OR t.tgname LIKE $2)`
+		countArgs = []interface{}{schema, keyword}
+		dataSQL = `SELECT t.tgname, n.nspname, '', ''
+			FROM pg_trigger t JOIN pg_class c ON t.tgrelid=c.oid JOIN pg_namespace n ON c.relnamespace=n.oid
+			WHERE n.nspname=$1 AND NOT t.tgisinternal AND ($2='' OR t.tgname LIKE $2)
+			ORDER BY t.tgname LIMIT $3 OFFSET $4`
+		dataArgs = []interface{}{schema, keyword, opts.PageSize, offset}
+	default:
+		return nil, fmt.Errorf("unsupported object type: %s", objectType)
+	}
+
+	var total int64
+	if err := d.db.QueryRow(countSQL, countArgs...).Scan(&total); err != nil {
+		return nil, fmt.Errorf("count objects failed: %w", err)
+	}
+
+	rows, err := d.db.Query(dataSQL, dataArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("list objects failed: %w", err)
+	}
+	defer rows.Close()
+
+	var objects []DBObject
+	for rows.Next() {
+		var obj DBObject
+		var actualSchema string
+		
+		// For functions, procedures, and triggers, scan the actual schema from database
+		if objectType == ObjectTypeFunction || objectType == ObjectTypeProcedure || objectType == ObjectTypeTrigger {
+			if err := rows.Scan(&obj.Name, &actualSchema, &obj.Comment, &obj.CreatedAt); err != nil {
+				return nil, fmt.Errorf("scan object failed: %w", err)
+			}
+			obj.Schema = actualSchema
+		} else {
+			if err := rows.Scan(&obj.Name, &obj.Comment, &obj.CreatedAt, &obj.UpdatedAt); err != nil {
+				return nil, fmt.Errorf("scan object failed: %w", err)
+			}
+			obj.Schema = schema
+		}
+		
+		obj.Type = objectType
+		obj.Status = obj.Comment
+		obj.Comment = ""
+		objects = append(objects, obj)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate objects failed: %w", err)
+	}
+	if objects == nil {
+		objects = []DBObject{}
+	}
+
+	return &ListResult{Objects: objects, Total: total, Page: opts.Page, PageSize: opts.PageSize}, nil
+}
+
+func (d *PostgresDriver) GetObjectDefinition(schema, objectType, objectName string) (string, error) {
+	var definition string
+	switch objectType {
+	case ObjectTypeMatView:
+		err := d.db.QueryRow(
+			`SELECT definition FROM pg_matviews WHERE schemaname=$1 AND matviewname=$2`,
+			schema, objectName,
+		).Scan(&definition)
+		if err != nil {
+			return "", fmt.Errorf("get matview definition failed: %w", err)
+		}
+	case ObjectTypeProcedure, ObjectTypeFunction:
+		var query string
+		if d.pgVersion >= 110000 {
+			// PostgreSQL 11+: use prokind
+			query = `SELECT pg_get_functiondef(p.oid)
+				FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
+				WHERE n.nspname=$1 AND p.proname=$2`
+			if objectType == ObjectTypeProcedure {
+				query += ` AND p.prokind='p'`
+			} else {
+				query += ` AND p.prokind='f'`
+			}
+		} else {
+			// PostgreSQL < 11: use proisagg
+			if objectType == ObjectTypeProcedure {
+				return "", fmt.Errorf("procedures not supported in PostgreSQL < 11")
+			}
+			query = `SELECT pg_get_functiondef(p.oid)
+				FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
+				WHERE n.nspname=$1 AND p.proname=$2 AND NOT p.proisagg`
+		}
+		query += ` LIMIT 1`
+		err := d.db.QueryRow(query, schema, objectName).Scan(&definition)
+		if err != nil {
+			// Try case-insensitive match in specified schema
+			var queryCI string
+			if d.pgVersion >= 110000 {
+				queryCI = `SELECT pg_get_functiondef(p.oid)
+					FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
+					WHERE n.nspname=$1 AND lower(p.proname)=lower($2)`
+				if objectType == ObjectTypeProcedure {
+					queryCI += ` AND p.prokind='p'`
+				} else {
+					queryCI += ` AND p.prokind='f'`
+				}
+			} else {
+				if objectType == ObjectTypeProcedure {
+					return "", fmt.Errorf("procedures not supported in PostgreSQL < 11")
+				}
+				queryCI = `SELECT pg_get_functiondef(p.oid)
+					FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
+					WHERE n.nspname=$1 AND lower(p.proname)=lower($2) AND NOT p.proisagg`
+			}
+			queryCI += ` LIMIT 1`
+			err = d.db.QueryRow(queryCI, schema, objectName).Scan(&definition)
+			if err != nil {
+				// Fallback: search in all schemas (excluding system schemas)
+				var queryAll string
+				if d.pgVersion >= 110000 {
+					queryAll = `SELECT pg_get_functiondef(p.oid)
+						FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
+						WHERE p.proname=$1 AND n.nspname NOT IN ('pg_catalog','information_schema','pg_toast')`
+					if objectType == ObjectTypeProcedure {
+						queryAll += ` AND p.prokind='p'`
+					} else {
+						queryAll += ` AND p.prokind='f'`
+					}
+				} else {
+					if objectType == ObjectTypeProcedure {
+						return "", fmt.Errorf("procedures not supported in PostgreSQL < 11")
+					}
+					queryAll = `SELECT pg_get_functiondef(p.oid)
+						FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
+						WHERE p.proname=$1 AND n.nspname NOT IN ('pg_catalog','information_schema','pg_toast') AND NOT p.proisagg`
+				}
+				queryAll += ` LIMIT 1`
+				err = d.db.QueryRow(queryAll, objectName).Scan(&definition)
+				if err != nil {
+					return "", fmt.Errorf("get function/procedure definition failed (schema=%s, name=%s): %w", schema, objectName, err)
+				}
+			}
+		}
+	case ObjectTypeSequence:
+		err := d.db.QueryRow(
+			`SELECT 'CREATE SEQUENCE ' || quote_ident(sequence_schema) || '.' || quote_ident(sequence_name) ||
+				' START WITH ' || start_value ||
+				' INCREMENT BY ' || increment ||
+				' MINVALUE ' || minimum_value ||
+				' MAXVALUE ' || maximum_value ||
+				CASE WHEN cycle_option='YES' THEN ' CYCLE' ELSE ' NO CYCLE' END || ';'
+			 FROM information_schema.sequences
+			 WHERE sequence_schema=$1 AND sequence_name=$2`,
+			schema, objectName,
+		).Scan(&definition)
+		if err != nil {
+			return "", fmt.Errorf("get sequence definition failed: %w", err)
+		}
+	case ObjectTypeType:
+		var typCategory string
+		err := d.db.QueryRow(
+			`SELECT CASE t.typtype WHEN 'c' THEN 'composite' WHEN 'd' THEN 'domain' WHEN 'e' THEN 'enum' WHEN 'r' THEN 'range' WHEN 'm' THEN 'multirange' ELSE 'base' END
+			 FROM pg_type t JOIN pg_namespace n ON t.typnamespace=n.oid
+			 WHERE n.nspname=$1 AND t.typname=$2`,
+			schema, objectName,
+		).Scan(&typCategory)
+		if err != nil {
+			return "", fmt.Errorf("get type category failed: %w", err)
+		}
+		
+		// Generate appropriate DDL based on type category
+		switch typCategory {
+		case "composite":
+			// Composite type: generate CREATE TYPE with fields
+			err = d.db.QueryRow(
+				`SELECT 'CREATE TYPE ' || quote_ident($1) || '.' || quote_ident($2) || ' AS (' || 
+					string_agg(quote_ident(a.attname) || ' ' || pg_catalog.format_type(a.atttypid, a.atttypmod), ', ' ORDER BY a.attnum) || 
+					');'
+				 FROM pg_type t 
+				 JOIN pg_namespace n ON t.typnamespace = n.oid
+				 JOIN pg_class c ON c.reltype = t.oid
+				 JOIN pg_attribute a ON a.attrelid = c.oid
+				 WHERE n.nspname = $1 AND t.typname = $2 AND a.attnum > 0 AND NOT a.attisdropped`,
+				schema, objectName,
+			).Scan(&definition)
+		case "enum":
+			// Enum type: generate CREATE TYPE with enum values
+			err = d.db.QueryRow(
+				`SELECT 'CREATE TYPE ' || quote_ident(n.nspname) || '.' || quote_ident(t.typname) || ' AS ENUM (' ||
+					string_agg(quote_literal(e.enumlabel), ', ' ORDER BY e.enumsortorder) || ');'
+				 FROM pg_type t
+				 JOIN pg_namespace n ON t.typnamespace = n.oid
+				 JOIN pg_enum e ON e.enumtypid = t.oid
+				 WHERE n.nspname = $1 AND t.typname = $2`,
+				schema, objectName,
+			).Scan(&definition)
+		default:
+			// For other types, use format_type as fallback
+			err = d.db.QueryRow(
+				`SELECT COALESCE(pg_catalog.format_type(t.oid, NULL), '-- definition unavailable')
+				 FROM pg_type t JOIN pg_namespace n ON t.typnamespace=n.oid
+				 WHERE n.nspname=$1 AND t.typname=$2`,
+				schema, objectName,
+			).Scan(&definition)
+		}
+		
+		if err != nil {
+			return "", fmt.Errorf("get type definition failed: %w", err)
+		}
+	case ObjectTypeTrigger:
+		err := d.db.QueryRow(
+			`SELECT pg_get_triggerdef(t.oid)
+			 FROM pg_trigger t JOIN pg_class c ON t.tgrelid=c.oid JOIN pg_namespace n ON c.relnamespace=n.oid
+			 WHERE n.nspname=$1 AND t.tgname=$2 AND NOT t.tgisinternal`,
+			schema, objectName,
+		).Scan(&definition)
+		if err != nil {
+			return "", fmt.Errorf("get trigger definition failed: %w", err)
+		}
+	default:
+		return "", fmt.Errorf("unsupported object type: %s", objectType)
+	}
+	return definition, nil
+}
+
+func (d *PostgresDriver) GetObjectDetail(schema, objectType, objectName string) (map[string]interface{}, error) {
+	detail := make(map[string]interface{})
+	detail["name"] = objectName
+	detail["type"] = objectType
+	detail["schema"] = schema
+
+	switch objectType {
+	case ObjectTypeMatView:
+		var isPopulated string
+		err := d.db.QueryRow(
+			`SELECT COALESCE(CASE WHEN ispopulated THEN 'populated' ELSE 'unpopulated' END,'')
+			 FROM pg_matviews WHERE schemaname=$1 AND matviewname=$2`,
+			schema, objectName,
+		).Scan(&isPopulated)
+		if err != nil {
+			return nil, err
+		}
+		detail["is_populated"] = isPopulated
+	case ObjectTypeProcedure, ObjectTypeFunction:
+		var query string
+		if d.pgVersion >= 110000 {
+			// PostgreSQL 11+: use prokind
+			query = `SELECT p.proname, n.nspname, COALESCE(d.description,'')
+				FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
+				LEFT JOIN pg_description d ON d.objoid=p.oid AND d.objsubid=0
+				WHERE n.nspname=$1 AND p.proname=$2`
+			if objectType == ObjectTypeProcedure {
+				query += ` AND p.prokind='p'`
+			} else {
+				query += ` AND p.prokind='f'`
+			}
+		} else {
+			// PostgreSQL < 11: use proisagg
+			if objectType == ObjectTypeProcedure {
+				// Procedures not supported in PG < 11
+				return nil, fmt.Errorf("procedures not supported in PostgreSQL < 11")
+			}
+			query = `SELECT p.proname, n.nspname, COALESCE(d.description,'')
+				FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
+				LEFT JOIN pg_description d ON d.objoid=p.oid AND d.objsubid=0
+				WHERE n.nspname=$1 AND p.proname=$2 AND NOT p.proisagg`
+		}
+		query += ` LIMIT 1`
+		var name, foundSchema, comment string
+		err := d.db.QueryRow(query, schema, objectName).Scan(&name, &foundSchema, &comment)
+		if err != nil {
+			// Try case-insensitive match in specified schema
+			var queryCI string
+			if d.pgVersion >= 110000 {
+				queryCI = `SELECT p.proname, n.nspname, COALESCE(d.description,'')
+					FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
+					LEFT JOIN pg_description d ON d.objoid=p.oid AND d.objsubid=0
+					WHERE n.nspname=$1 AND lower(p.proname)=lower($2)`
+				if objectType == ObjectTypeProcedure {
+					queryCI += ` AND p.prokind='p'`
+				} else {
+					queryCI += ` AND p.prokind='f'`
+				}
+			} else {
+				if objectType == ObjectTypeProcedure {
+					return nil, fmt.Errorf("procedures not supported in PostgreSQL < 11")
+				}
+				queryCI = `SELECT p.proname, n.nspname, COALESCE(d.description,'')
+					FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
+					LEFT JOIN pg_description d ON d.objoid=p.oid AND d.objsubid=0
+					WHERE n.nspname=$1 AND lower(p.proname)=lower($2) AND NOT p.proisagg`
+			}
+			queryCI += ` LIMIT 1`
+			err = d.db.QueryRow(queryCI, schema, objectName).Scan(&name, &foundSchema, &comment)
+			if err != nil {
+				fmt.Printf("[GetObjectDetail] Second query failed: schema=%s, name=%s, version=%d, query=%s, err=%v\n", schema, objectName, d.pgVersion, queryCI, err)
+				// Fallback: search in all schemas (excluding system schemas)
+				var queryAll string
+				if d.pgVersion >= 110000 {
+					queryAll = `SELECT p.proname, n.nspname, COALESCE(d.description,'')
+						FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
+						LEFT JOIN pg_description d ON d.objoid=p.oid AND d.objsubid=0
+						WHERE p.proname=$1 AND n.nspname NOT IN ('pg_catalog','information_schema','pg_toast')`
+					if objectType == ObjectTypeProcedure {
+						queryAll += ` AND p.prokind='p'`
+					} else {
+						queryAll += ` AND p.prokind='f'`
+					}
+				} else {
+					if objectType == ObjectTypeProcedure {
+						return nil, fmt.Errorf("procedures not supported in PostgreSQL < 11")
+					}
+					queryAll = `SELECT p.proname, n.nspname, COALESCE(d.description,'')
+						FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
+						LEFT JOIN pg_description d ON d.objoid=p.oid AND d.objsubid=0
+						WHERE p.proname=$1 AND n.nspname NOT IN ('pg_catalog','information_schema','pg_toast') AND NOT p.proisagg`
+				}
+				queryAll += ` LIMIT 1`
+				fmt.Printf("[GetObjectDetail] Third query: name=%s, version=%d, query=%s\n", objectName, d.pgVersion, queryAll)
+				err = d.db.QueryRow(queryAll, objectName).Scan(&name, &foundSchema, &comment)
+				if err != nil {
+					fmt.Printf("[GetObjectDetail] Third query failed: name=%s, err=%v\n", objectName, err)
+					return nil, fmt.Errorf("get function/procedure detail failed (schema=%s, name=%s): %w", schema, objectName, err)
+				}
+			}
+		}
+		detail["comment"] = comment
+		detail["actual_schema"] = foundSchema
+	case ObjectTypeSequence:
+		var dataType, startVal, minVal, maxVal, incr, cycle string
+		err := d.db.QueryRow(
+			`SELECT data_type, COALESCE(start_value::text,''), COALESCE(minimum_value::text,''),
+				COALESCE(maximum_value::text,''), COALESCE(increment::text,''), cycle_option
+			 FROM information_schema.sequences
+			 WHERE sequence_schema=$1 AND sequence_name=$2`,
+			schema, objectName,
+		).Scan(&dataType, &startVal, &minVal, &maxVal, &incr, &cycle)
+		if err != nil {
+			return nil, err
+		}
+		detail["data_type"] = dataType
+		detail["start_value"] = startVal
+		detail["minimum_value"] = minVal
+		detail["maximum_value"] = maxVal
+		detail["increment"] = incr
+		detail["cycle"] = cycle
+	case ObjectTypeType:
+		var typeCategory, comment string
+		err := d.db.QueryRow(
+			`SELECT CASE t.typtype WHEN 'c' THEN 'composite' WHEN 'd' THEN 'domain' WHEN 'e' THEN 'enum' WHEN 'r' THEN 'range' WHEN 'm' THEN 'multirange' ELSE 'base' END,
+				COALESCE(pg_catalog.obj_description(t.oid), '')
+			 FROM pg_type t JOIN pg_namespace n ON t.typnamespace=n.oid
+			 WHERE n.nspname=$1 AND t.typname=$2`,
+			schema, objectName,
+		).Scan(&typeCategory, &comment)
+		if err != nil {
+			// Type not found - return basic info without error
+			detail["type_category"] = "unknown"
+			detail["comment"] = ""
+			detail["error"] = fmt.Sprintf("Type '%s' not found in schema '%s'", objectName, schema)
+		} else {
+			detail["type_category"] = typeCategory
+			detail["comment"] = comment
+		}
+	case ObjectTypeTrigger:
+		// Get trigger definition and table name
+		var triggerDef, tableName string
+		err := d.db.QueryRow(
+			`SELECT pg_get_triggerdef(t.oid), c.relname
+			 FROM pg_trigger t JOIN pg_class c ON t.tgrelid=c.oid JOIN pg_namespace n ON c.relnamespace=n.oid
+			 WHERE n.nspname=$1 AND t.tgname=$2 AND NOT t.tgisinternal`,
+			schema, objectName,
+		).Scan(&triggerDef, &tableName)
+		if err != nil {
+			return nil, fmt.Errorf("get trigger detail failed: %w", err)
+		}
+		detail["definition"] = triggerDef
+		detail["table_name"] = tableName
+	default:
+		return nil, fmt.Errorf("unsupported object type: %s", objectType)
+	}
+	return detail, nil
+}
+
+func (d *PostgresDriver) CheckDependencies(schema, objectType, objectName string) ([]DependencyInfo, error) {
+	var deps []DependencyInfo
+
+	rows, err := d.db.Query(
+		`SELECT dep_class.relname,
+			CASE dep_class.relkind WHEN 'r' THEN 'table' WHEN 'v' THEN 'view' WHEN 'p' THEN 'procedure' WHEN 'f' THEN 'function' ELSE dep_class.relkind::text END,
+			'department type: ' || dep.deptype::text
+		 FROM pg_depend dep
+		 JOIN pg_class dep_class ON dep.objid=dep_class.oid
+		 JOIN pg_namespace dep_ns ON dep_class.relnamespace=dep_ns.oid
+		 WHERE dep_ns.nspname=$1
+		   AND dep.refobjid=(SELECT oid FROM pg_class WHERE relname=$2 AND relnamespace=(SELECT oid FROM pg_namespace WHERE nspname=$1))
+		   AND dep_class.relname!=$2`,
+		schema, objectName,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("check pg_depend dependencies failed: %w", err)
+	}
+	for rows.Next() {
+		var dep DependencyInfo
+		if err := rows.Scan(&dep.DependentName, &dep.DependentType, &dep.Detail); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		dep.Schema = schema
+		deps = append(deps, dep)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+
+	boundaryPattern := `\b` + regexp.QuoteMeta(objectName) + `\b`
+	var rows2 *sql.Rows
+	if d.pgVersion < 110000 {
+		rows2, err = d.db.Query(
+			`SELECT p.proname, 'function'
+			 FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
+			 WHERE n.nspname=$1 AND p.proname!=$2 AND NOT p.proisagg AND p.prosrc ~ $3`,
+			schema, objectName, boundaryPattern,
+		)
+	} else {
+		rows2, err = d.db.Query(
+			`SELECT p.proname,
+				CASE p.prokind WHEN 'p' THEN 'procedure' WHEN 'f' THEN 'function' ELSE 'other' END
+			 FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
+			 WHERE n.nspname=$1 AND p.proname!=$2 AND p.prosrc ~ $3`,
+			schema, objectName, boundaryPattern,
+		)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("check pg_proc dependencies failed: %w", err)
+	}
+	for rows2.Next() {
+		var dep DependencyInfo
+		if err := rows2.Scan(&dep.DependentName, &dep.DependentType); err != nil {
+			rows2.Close()
+			return nil, err
+		}
+		dep.Schema = schema
+		dep.Detail = fmt.Sprintf("function body references %s (text match, may have false positives)", objectName)
+		deps = append(deps, dep)
+	}
+	if err := rows2.Err(); err != nil {
+		rows2.Close()
+		return nil, err
+	}
+	rows2.Close()
+
+	if deps == nil {
+		deps = []DependencyInfo{}
+	}
+	return deps, nil
+}
+
+func (d *PostgresDriver) ExecuteObjectDDL(schema, objectType, ddl string) (string, error) {
+	_, err := d.db.Exec(ddl)
+	if err != nil {
+		return "", fmt.Errorf("PostgreSQL DDL execution failed: %w", err)
+	}
+	return fmt.Sprintf("%s object created/modified", objectType), nil
+}
+
+func (d *PostgresDriver) GenerateCreateTemplate(objectType, schema, objectName string) (string, error) {
+	name := "{{.ObjectName}}"
+	if objectName != "" {
+		name = objectName
+	}
+	q := func(s string) string { return `"` + s + `"` }
+	qualified := q(schema) + "." + q(name)
+
+	switch objectType {
+	case ObjectTypeProcedure:
+		return `CREATE OR REPLACE PROCEDURE ` + qualified + `(IN param1 integer)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- TODO: procedure logic
+    RAISE NOTICE 'param1: %', param1;
+END;
+$$;`, nil
+	case ObjectTypeFunction:
+		return `CREATE OR REPLACE FUNCTION ` + qualified + `(param1 integer)
+RETURNS integer
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- TODO: function logic
+    RETURN param1;
+END;
+$$;`, nil
+	case ObjectTypeSequence:
+		return `CREATE SEQUENCE ` + qualified + `
+START WITH 1
+INCREMENT BY 1
+MINVALUE 1
+MAXVALUE 9223372036854775807
+NO CYCLE;`, nil
+	case ObjectTypeType:
+		return `CREATE TYPE ` + qualified + ` AS (
+    field1 integer,
+    field2 varchar(100)
+);`, nil
+	case ObjectTypeMatView:
+		return `CREATE MATERIALIZED VIEW ` + qualified + ` AS
+SELECT 1 AS id, 'TODO' AS description;`, nil
+	case ObjectTypeTrigger:
+		return `-- Step 1: Create trigger function
+CREATE OR REPLACE FUNCTION ` + q(schema) + "." + q(name + "_func") + `()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- TODO: trigger logic
+    -- Access row data with NEW (for INSERT/UPDATE) or OLD (for DELETE/UPDATE)
+    -- Example: RAISE NOTICE 'New value: %', NEW;
+    RETURN NEW; -- For INSERT/UPDATE; use RETURN OLD for DELETE
+END;
+$$;
+
+-- Step 2: Create trigger
+CREATE TRIGGER ` + q(name) + `
+    BEFORE INSERT -- Change to: AFTER INSERT, BEFORE UPDATE, AFTER UPDATE, BEFORE DELETE, AFTER DELETE
+    ON ` + qualified + `
+    FOR EACH ROW
+    EXECUTE FUNCTION ` + q(schema) + "." + q(name + "_func") + `();`, nil
+	default:
+		return "", fmt.Errorf("unsupported object type: %s", objectType)
+	}
+}
+
+func (d *PostgresDriver) GenerateAlterDDL(schema, objectType, name, newDef string) ([]string, error) {
+	switch objectType {
+	case ObjectTypeProcedure, ObjectTypeFunction:
+		return []string{newDef}, nil
+	case ObjectTypeMatView:
+		dropDDL, err := d.GenerateDropDDL(schema, objectType, name)
+		if err != nil {
+			return nil, err
+		}
+		return []string{dropDDL, newDef}, nil
+	case ObjectTypeSequence, ObjectTypeType:
+		// PostgreSQL doesn't support ALTER TYPE ... AS (...), so use DROP + CREATE
+		dropDDL, err := d.GenerateDropDDL(schema, objectType, name)
+		if err != nil {
+			return nil, err
+		}
+		return []string{dropDDL, newDef}, nil
+	default:
+		return nil, fmt.Errorf("unsupported object type: %s", objectType)
+	}
+}
+
+func (d *PostgresDriver) GenerateDropDDL(schema, objectType, name string) (string, error) {
+	qualified := fmt.Sprintf(`"%s"."%s"`, schema, name)
+	switch objectType {
+	case ObjectTypeProcedure:
+		return fmt.Sprintf("DROP PROCEDURE %s", qualified), nil
+	case ObjectTypeFunction:
+		return fmt.Sprintf("DROP FUNCTION %s", qualified), nil
+	case ObjectTypeMatView:
+		return fmt.Sprintf("DROP MATERIALIZED VIEW %s", qualified), nil
+	case ObjectTypeSequence:
+		return fmt.Sprintf("DROP SEQUENCE %s", qualified), nil
+	case ObjectTypeType:
+		return fmt.Sprintf("DROP TYPE %s", qualified), nil
+	default:
+		return "", fmt.Errorf("unsupported object type: %s", objectType)
+	}
+}
 

@@ -157,3 +157,27 @@ export interface TableListItem {
   create_time: string | null;
   update_time: string | null;
 }
+
+export interface DBObject {
+  name: string;
+  type: string;
+  schema: string;
+  comment?: string;
+  status?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ObjectListResult {
+  list: DBObject[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface DependencyInfo {
+  dependent_name: string;
+  dependent_type: string;
+  schema: string;
+  detail: string;
+}

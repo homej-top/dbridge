@@ -47,7 +47,9 @@ request.interceptors.response.use(
       message.error('服务不可用');
       return Promise.reject(error);
     }
-    message.error(error.message || '网络错误');
+    // Extract error message from response data
+    const errorMsg = error.response?.data?.message || error.message || '网络错误';
+    message.error(errorMsg);
     return Promise.reject(error);
   }
 );
@@ -83,6 +85,24 @@ export const dsAPI = {
     request.get('/query/ddl', { params: { data_source_id: dataSourceId, schema, table } }),
   export: (password: string) => request.post('/data-sources/export', { password }),
   import: (items: any[], password: string) => request.post('/data-sources/import', { items, password }),
+
+  // Database object management
+  getSupportedObjectTypes: (id: string) =>
+    request.get(`/data-sources/${id}/objects/types`),
+  listObjectsByType: (id: string, schema: string, type: string, params?: { page?: number; page_size?: number; keyword?: string; database?: string }) =>
+    request.get(`/data-sources/${id}/objects/${encodeURIComponent(schema)}/${type}`, { params }),
+  getObjectDetail: (id: string, schema: string, type: string, name: string, database?: string) =>
+    request.get(`/data-sources/${id}/objects/${encodeURIComponent(schema)}/${type}/${encodeURIComponent(name)}`, { params: database ? { database } : undefined }),
+  createObject: (id: string, schema: string, type: string, data: { ddl: string; database?: string }) =>
+    request.post(`/data-sources/${id}/objects/${encodeURIComponent(schema)}/${type}`, data),
+  alterObject: (id: string, schema: string, type: string, name: string, data: { ddl: string; force?: boolean; database?: string }) =>
+    request.put(`/data-sources/${id}/objects/${encodeURIComponent(schema)}/${type}/${encodeURIComponent(name)}`, data),
+  dropObject: (id: string, schema: string, type: string, name: string, data?: { force?: boolean; database?: string }) =>
+    request.delete(`/data-sources/${id}/objects/${encodeURIComponent(schema)}/${type}/${encodeURIComponent(name)}`, { data }),
+  getCreateTemplate: (id: string, schema: string, type: string, params?: { object_name?: string; database?: string }) =>
+    request.get(`/data-sources/${id}/objects/${encodeURIComponent(schema)}/${type}/template`, { params }),
+  refreshMatView: (id: string, schema: string, name: string, data: { mode: 'normal' | 'concurrently' | 'with-no-data'; database?: string }) =>
+    request.post(`/data-sources/${id}/objects/${encodeURIComponent(schema)}/matview/${encodeURIComponent(name)}/refresh`, data),
 };
 
 export const queryAPI = {

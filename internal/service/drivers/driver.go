@@ -15,10 +15,11 @@ import (
 // TreeMetadata describes the hierarchical organization of a database type.
 // Used by the frontend to render the correct tree structure, labels, and actions.
 type TreeMetadata struct {
-	DBType       string            `json:"db_type"`                 // mysql, postgres, oracle, sqlserver
-	Levels       []TreeLevel       `json:"levels"`                  // hierarchy from root to leaf
-	AllowCreate  map[string]bool   `json:"allow_create"`           // e.g. {"schema":true, "database":false}
-	SystemFilter *SystemFilter     `json:"system_filter,omitempty"` // rules for excluding system objects
+	DBType               string            `json:"db_type"`                            // mysql, postgres, oracle, sqlserver
+	Levels               []TreeLevel       `json:"levels"`                             // hierarchy from root to leaf
+	AllowCreate          map[string]bool   `json:"allow_create"`                       // e.g. {"schema":true, "database":false}
+	SystemFilter         *SystemFilter     `json:"system_filter,omitempty"`            // rules for excluding system objects
+	SupportedObjectTypes []string          `json:"supported_object_types,omitempty"`   // object types this driver can manage
 }
 
 // TreeLevel describes one level in the database hierarchy
@@ -146,6 +147,41 @@ type ColumnInfo struct {
 	Key      string `json:"key"`
 }
 
+// DBObject describes a database object's basic metadata (procedure, function, trigger, etc.)
+type DBObject struct {
+	Name      string `json:"name"`
+	Type      string `json:"type"`
+	Schema    string `json:"schema"`
+	Comment   string `json:"comment,omitempty"`
+	Status    string `json:"status,omitempty"`
+	CreatedAt string `json:"created_at,omitempty"`
+	UpdatedAt string `json:"updated_at,omitempty"`
+}
+
+// ListOptions encapsulates pagination and search parameters for object listing
+type ListOptions struct {
+	Page     int    `json:"page"`
+	PageSize int    `json:"page_size"`
+	Keyword  string `json:"keyword"`
+	Database string `json:"database,omitempty"` // Optional: for multi-database support (PostgreSQL, etc.)
+}
+
+// ListResult encapsulates paginated query results with database-level COUNT
+type ListResult struct {
+	Objects  []DBObject `json:"list"`
+	Total    int64      `json:"total"`
+	Page     int        `json:"page"`
+	PageSize int        `json:"page_size"`
+}
+
+// DependencyInfo describes a dependency relationship between database objects
+type DependencyInfo struct {
+	DependentName string `json:"dependent_name"`
+	DependentType string `json:"dependent_type"`
+	Schema        string `json:"schema"`
+	Detail        string `json:"detail,omitempty"`
+}
+
 // DriverConfig holds connection parameters
 type DriverConfig struct {
 	Host              string
@@ -158,6 +194,38 @@ type DriverConfig struct {
 	OracleRole        string // "default", "sysdba", "sysoper"
 	OracleService     string // service name or SID value
 	DB                *sql.DB // pre-built *sql.DB from pool manager (optional)
+
+	// SSH tunnel
+	SSHHost         string
+	SSHPort         int
+	SSHUsername      string
+	SSHPassword     string
+	SSHKey          string
+	SSHKeyPassphrase string
+
+	// SSL advanced
+	SSLCert     string
+	SSLKey      string
+	SSLRootCert string
+
+	// Timeouts (seconds)
+	ConnectTimeout int
+	QueryTimeout   int
+}
+
+// ConnectionOptions holds advanced connection settings stored in ExtraConfig JSON.
+type ConnectionOptions struct {
+	SSHHost          string `json:"ssh_host,omitempty"`
+	SSHPort          int    `json:"ssh_port,omitempty"`
+	SSHUsername       string `json:"ssh_username,omitempty"`
+	SSHPassword      string `json:"ssh_password,omitempty"`
+	SSHKey           string `json:"ssh_key,omitempty"`
+	SSHKeyPassphrase string `json:"ssh_key_passphrase,omitempty"`
+	SSLCert          string `json:"ssl_cert,omitempty"`
+	SSLKey           string `json:"ssl_key,omitempty"`
+	SSLRootCert      string `json:"ssl_root_cert,omitempty"`
+	ConnectTimeout   int    `json:"connect_timeout,omitempty"`
+	QueryTimeout     int    `json:"query_timeout,omitempty"`
 }
 
 // ─── DatabaseDriver Interface ──────────────────────────────────────────────
@@ -338,6 +406,17 @@ type DatabaseDriver interface {
 	// ─── MSSQL Guest Compliance ──────────────────────────────────────
 	CheckGuestStatus(database string) (*GuestStatus, error)
 	DisableGuest(database string) error
+
+	// ─── Database Object Management ─────────────────────────────────────
+	ListObjectsByType(schema string, objectType string, opts ListOptions) (*ListResult, error)
+	GetObjectDefinition(schema string, objectType string, objectName string) (string, error)
+	GetObjectDetail(schema string, objectType string, objectName string) (map[string]interface{}, error)
+	CheckDependencies(schema string, objectType string, objectName string) ([]DependencyInfo, error)
+	SupportedObjectTypes() []string
+	ExecuteObjectDDL(schema string, objectType string, ddl string) (string, error)
+	GenerateCreateTemplate(objectType string, schema string, objectName string) (string, error)
+	GenerateAlterDDL(schema string, objectType string, objectName string, newDefinition string) ([]string, error)
+	GenerateDropDDL(schema string, objectType string, objectName string) (string, error)
 }
 
 // IndexTypeInfo describes an index type supported by a database.

@@ -15,6 +15,7 @@ import {
   Upload,
   Alert,
   Tooltip,
+  Collapse,
 } from 'antd';
 import {
   PlusOutlined,
@@ -78,16 +79,30 @@ const DataSources: React.FC = () => {
       form.resetFields();
       setEditingId(record.id);
       setEditingIsSystem(!!record.is_system);
-      // Parse Oracle extra_config
+      // Parse Oracle extra_config and connection options
       let oracleConnectMode = 'service_name';
       let oracleRole = 'default';
       let oracleService = '';
-      if (record.type === 'oracle' && record.extra_config) {
+      let connOpts: Record<string, any> = {};
+      if (record.extra_config) {
         try {
           const extra = JSON.parse(record.extra_config);
           oracleConnectMode = extra.connect_mode || 'service_name';
           oracleRole = extra.role || 'default';
           oracleService = extra.oracle_service || '';
+          connOpts = {
+            ssh_host: extra.ssh_host || '',
+            ssh_port: extra.ssh_port || 22,
+            ssh_username: extra.ssh_username || '',
+            ssh_password: extra.ssh_password || '',
+            ssh_key: extra.ssh_key || '',
+            ssh_key_passphrase: extra.ssh_key_passphrase || '',
+            ssl_cert: extra.ssl_cert || '',
+            ssl_key: extra.ssl_key || '',
+            ssl_root_cert: extra.ssl_root_cert || '',
+            connect_timeout: extra.connect_timeout || 10,
+            query_timeout: extra.query_timeout || 30,
+          };
         } catch {}
       }
       form.setFieldsValue({
@@ -102,6 +117,7 @@ const DataSources: React.FC = () => {
         oracle_connect_mode: oracleConnectMode,
         oracle_role: oracleRole,
         oracle_service: oracleService,
+        ...connOpts,
       } as any);
     } else {
       setEditingId(null);
@@ -121,17 +137,30 @@ const DataSources: React.FC = () => {
     if (editingId && (!values.password || values.password.trim() === '')) {
       delete (values as any).password;
     }
-    // Build Oracle extra_config JSON
+    // Build extra_config JSON with Oracle + connection options
+    const extraConfig: Record<string, any> = {};
     if (values.type === 'oracle') {
-      const oracleService = (values as any).oracle_service || '';
-      const oracleMode = (values as any).oracle_connect_mode || 'service_name';
-      const oracleRole = (values as any).oracle_role || 'default';
-      (values as any).extra_config = JSON.stringify({
-        oracle_service: oracleService,
-        connect_mode: oracleMode,
-        role: oracleRole,
-      });
+      extraConfig.oracle_service = (values as any).oracle_service || '';
+      extraConfig.connect_mode = (values as any).oracle_connect_mode || 'service_name';
+      extraConfig.role = (values as any).oracle_role || 'default';
     }
+    // SSH tunnel
+    if ((values as any).ssh_host) {
+      extraConfig.ssh_host = (values as any).ssh_host;
+      extraConfig.ssh_port = (values as any).ssh_port || 22;
+      extraConfig.ssh_username = (values as any).ssh_username || '';
+      if ((values as any).ssh_password) extraConfig.ssh_password = (values as any).ssh_password;
+      if ((values as any).ssh_key) extraConfig.ssh_key = (values as any).ssh_key;
+      if ((values as any).ssh_key_passphrase) extraConfig.ssh_key_passphrase = (values as any).ssh_key_passphrase;
+    }
+    // SSL advanced
+    if ((values as any).ssl_cert) extraConfig.ssl_cert = (values as any).ssl_cert;
+    if ((values as any).ssl_key) extraConfig.ssl_key = (values as any).ssl_key;
+    if ((values as any).ssl_root_cert) extraConfig.ssl_root_cert = (values as any).ssl_root_cert;
+    // Timeouts
+    if ((values as any).connect_timeout) extraConfig.connect_timeout = (values as any).connect_timeout;
+    if ((values as any).query_timeout) extraConfig.query_timeout = (values as any).query_timeout;
+    (values as any).extra_config = JSON.stringify(extraConfig);
     try {
       if (editingId) {
         await dsAPI.update(editingId, values);
@@ -503,6 +532,55 @@ const DataSources: React.FC = () => {
                     <Input placeholder="/data/sqlite/mydb.db" />
                   </Form.Item>
                 </>
+              ) : null
+            }
+          </Form.Item>
+
+          {/* Advanced Connection Settings */}
+          <Form.Item noStyle shouldUpdate>
+            {({ getFieldValue }) =>
+              getFieldValue('type') !== 'sqlite' ? (
+                <Collapse ghost size="small" style={{ marginBottom: 8 }}>
+                  <Collapse.Panel header={tr('datasource.sshTunnel')} key="ssh">
+                    <Form.Item name="ssh_host" label={tr('datasource.sshHost')}>
+                      <Input placeholder="ssh.example.com" />
+                    </Form.Item>
+                    <Form.Item name="ssh_port" label={tr('datasource.sshPort')} initialValue={22}>
+                      <InputNumber min={1} max={65535} style={{ width: '100%' }} />
+                    </Form.Item>
+                    <Form.Item name="ssh_username" label={tr('datasource.sshUsername')}>
+                      <Input />
+                    </Form.Item>
+                    <Form.Item name="ssh_password" label={tr('datasource.sshPassword')}>
+                      <Input.Password placeholder={tr('datasource.sshPasswordPlaceholder')} />
+                    </Form.Item>
+                    <Form.Item name="ssh_key" label={tr('datasource.sshKey')}>
+                      <Input.TextArea rows={3} placeholder={tr('datasource.sshKeyPlaceholder')} />
+                    </Form.Item>
+                    <Form.Item name="ssh_key_passphrase" label={tr('datasource.sshKeyPassphrase')}>
+                      <Input.Password />
+                    </Form.Item>
+                  </Collapse.Panel>
+                  <Collapse.Panel header={tr('datasource.sslAdvanced')} key="ssl">
+                    <Form.Item name="ssl_cert" label={tr('datasource.sslCert')}>
+                      <Input.TextArea rows={2} placeholder={tr('datasource.sslCertPlaceholder')} />
+                    </Form.Item>
+                    <Form.Item name="ssl_key" label={tr('datasource.sslKey')}>
+                      <Input.TextArea rows={2} placeholder={tr('datasource.sslKeyPlaceholder')} />
+                    </Form.Item>
+                    <Form.Item name="ssl_root_cert" label={tr('datasource.sslRootCert')}>
+                      <Input.TextArea rows={2} placeholder={tr('datasource.sslRootCertPlaceholder')} />
+                    </Form.Item>
+                  </Collapse.Panel>
+                  <Collapse.Panel header={tr('datasource.timeouts')} key="timeouts">
+                    <Form.Item name="connect_timeout" label={tr('datasource.connectTimeout')} initialValue={10}>
+                      <InputNumber min={1} max={300} addonAfter={tr('datasource.seconds')} style={{ width: '100%' }} />
+                    </Form.Item>
+                    <Form.Item name="query_timeout" label={tr('datasource.queryTimeout')} initialValue={30}>
+                      <InputNumber min={1} max={3600} addonAfter={tr('datasource.seconds')} style={{ width: '100%' }} />
+                    </Form.Item>
+                  </Collapse.Panel>
+                </Collapse>
               ) : null
             }
           </Form.Item>

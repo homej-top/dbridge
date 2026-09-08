@@ -1006,6 +1006,14 @@ func (d *OracleDriver) GetTreeMetadata() TreeMetadata {
 			{Key: "user", Label: "User", LabelKey: "tree.user", Icon: "DatabaseOutlined"},
 			{Key: "tables_folder", Label: "Tables", LabelKey: "tree.tables", Icon: "TableOutlined"},
 			{Key: "views_folder", Label: "Views", LabelKey: "tree.views", Icon: "EyeOutlined"},
+			{Key: "procedure_folder", Label: "Procedures", LabelKey: "tree.procedures", Icon: "CodeOutlined"},
+			{Key: "function_folder", Label: "Functions", LabelKey: "tree.functions", Icon: "FunctionOutlined"},
+			{Key: "package_folder", Label: "Packages", LabelKey: "tree.packages", Icon: "AppstoreOutlined"},
+			{Key: "trigger_folder", Label: "Triggers", LabelKey: "tree.triggers", Icon: "ThunderboltOutlined"},
+			{Key: "type_folder", Label: "Types", LabelKey: "tree.types", Icon: "BlockOutlined"},
+			{Key: "sequence_folder", Label: "Sequences", LabelKey: "tree.sequences", Icon: "NumberOutlined"},
+			{Key: "synonym_folder", Label: "Synonyms", LabelKey: "tree.synonyms", Icon: "SwapOutlined"},
+			{Key: "matview_folder", Label: "Materialized Views", LabelKey: "tree.matviews", Icon: "TableOutlined"},
 		},
 		AllowCreate: map[string]bool{"user": true},
 		SystemFilter: &SystemFilter{
@@ -1020,6 +1028,7 @@ func (d *OracleDriver) GetTreeMetadata() TreeMetadata {
 			},
 			ExcludePrefixes: []string{"SYS$", "APEX_", "FLOWS_"},
 		},
+		SupportedObjectTypes: []string{ObjectTypeProcedure, ObjectTypeFunction, ObjectTypePackage, ObjectTypeTrigger, ObjectTypeType, ObjectTypeSequence, ObjectTypeSynonym, ObjectTypeMatView},
 	}
 }
 
@@ -1528,4 +1537,434 @@ func (d *OracleDriver) SQLIsNull(col, defaultVal string) string {
 }
 func (d *OracleDriver) SQLCurrentTimestamp() string { return "SYSDATE" }
 func (d *OracleDriver) SQLQuoteIdent(name string) string { return `"` + name + `"` }
+
+// ─── Database Object Management ─────────────────────────────────────────
+
+func (d *OracleDriver) SupportedObjectTypes() []string {
+	return []string{ObjectTypeProcedure, ObjectTypeFunction, ObjectTypePackage, ObjectTypeTrigger, ObjectTypeType, ObjectTypeSequence, ObjectTypeSynonym, ObjectTypeMatView}
+}
+
+func mapOracleObjectType(objectType string) string {
+	switch objectType {
+	case ObjectTypeProcedure:
+		return "PROCEDURE"
+	case ObjectTypeFunction:
+		return "FUNCTION"
+	case ObjectTypePackage:
+		return "PACKAGE"
+	case ObjectTypeTrigger:
+		return "TRIGGER"
+	case ObjectTypeType:
+		return "TYPE"
+	case ObjectTypeSequence:
+		return "SEQUENCE"
+	case ObjectTypeSynonym:
+		return "SYNONYM"
+	case ObjectTypeMatView:
+		return "MATERIALIZED VIEW"
+	default:
+		return strings.ToUpper(objectType)
+	}
+}
+
+func (d *OracleDriver) getSourceByType(schema, name, oracleType string) (string, error) {
+	var builder strings.Builder
+	offset := 1
+	batchSize := 100
+
+	for {
+		rows, err := d.db.Query(
+			`SELECT COALESCE(text, '') FROM all_source
+			 WHERE owner=:1 AND name=:2 AND type=:3
+			 ORDER BY line
+			 OFFSET :4 ROWS FETCH NEXT :5 ROWS ONLY`,
+			schema, name, oracleType, offset, batchSize,
+		)
+		if err != nil {
+			return "", err
+		}
+
+		rowCount := 0
+		for rows.Next() {
+			var text string
+			if err := rows.Scan(&text); err != nil {
+				rows.Close()
+				return "", err
+			}
+			builder.WriteString(text)
+			rowCount++
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return "", fmt.Errorf("iterate all_source failed: %w", err)
+		}
+		rows.Close()
+
+		if rowCount < batchSize {
+			break
+		}
+		offset += batchSize
+	}
+	return builder.String(), nil
+}
+
+func (d *OracleDriver) ListObjectsByType(schema, objectType string, opts ListOptions) (*ListResult, error) {
+	keyword := opts.Keyword
+	offset := (opts.Page - 1) * opts.PageSize
+
+	var countSQL, dataSQL string
+	var countArgs, dataArgs []interface{}
+
+	switch objectType {
+	case ObjectTypeMatView:
+		countSQL = `SELECT COUNT(*) FROM all_mviews WHERE owner=:1 AND (:2 IS NULL OR :3='' OR mview_name LIKE :4)`
+		countArgs = []interface{}{schema, keyword, keyword, keyword}
+		dataSQL = `SELECT mview_name, COALESCE(updatable,''), COALESCE(refresh_mode,''), COALESCE(refresh_method,'')
+			FROM all_mviews WHERE owner=:1 AND (:2 IS NULL OR :3='' OR mview_name LIKE :4)
+			ORDER BY mview_name OFFSET :5 ROWS FETCH NEXT :6 ROWS ONLY`
+		dataArgs = []interface{}{schema, keyword, keyword, keyword, offset, opts.PageSize}
+	case ObjectTypeProcedure, ObjectTypeFunction:
+		oraType := "PROCEDURE"
+		if objectType == ObjectTypeFunction {
+			oraType = "FUNCTION"
+		}
+		countSQL = `SELECT COUNT(*) FROM all_objects WHERE owner=:1 AND object_type=:2 AND (:3 IS NULL OR :4='' OR object_name LIKE :5)`
+		countArgs = []interface{}{schema, oraType, keyword, keyword, keyword}
+		dataSQL = `SELECT object_name, COALESCE(status,''), TO_CHAR(created,'YYYY-MM-DD'), TO_CHAR(last_ddl_time,'YYYY-MM-DD')
+			FROM all_objects WHERE owner=:1 AND object_type=:2 AND (:3 IS NULL OR :4='' OR object_name LIKE :5)
+			ORDER BY object_name OFFSET :6 ROWS FETCH NEXT :7 ROWS ONLY`
+		dataArgs = []interface{}{schema, oraType, keyword, keyword, keyword, offset, opts.PageSize}
+	case ObjectTypePackage:
+		countSQL = `SELECT COUNT(DISTINCT object_name) FROM all_objects WHERE owner=:1 AND object_type='PACKAGE' AND (:2 IS NULL OR :3='' OR object_name LIKE :4)`
+		countArgs = []interface{}{schema, keyword, keyword, keyword}
+		dataSQL = `SELECT object_name, COALESCE(status,''), TO_CHAR(created,'YYYY-MM-DD'), TO_CHAR(last_ddl_time,'YYYY-MM-DD')
+			FROM all_objects WHERE owner=:1 AND object_type='PACKAGE' AND (:2 IS NULL OR :3='' OR object_name LIKE :4)
+			ORDER BY object_name OFFSET :5 ROWS FETCH NEXT :6 ROWS ONLY`
+		dataArgs = []interface{}{schema, keyword, keyword, keyword, offset, opts.PageSize}
+	case ObjectTypeTrigger:
+		countSQL = `SELECT COUNT(*) FROM all_triggers WHERE owner=:1 AND (:2 IS NULL OR :3='' OR trigger_name LIKE :4)`
+		countArgs = []interface{}{schema, keyword, keyword, keyword}
+		dataSQL = `SELECT trigger_name, COALESCE(status,''), COALESCE(trigger_type,''), COALESCE(triggering_event,'')
+			FROM all_triggers WHERE owner=:1 AND (:2 IS NULL OR :3='' OR trigger_name LIKE :4)
+			ORDER BY trigger_name OFFSET :5 ROWS FETCH NEXT :6 ROWS ONLY`
+		dataArgs = []interface{}{schema, keyword, keyword, keyword, offset, opts.PageSize}
+	case ObjectTypeSequence:
+		countSQL = `SELECT COUNT(*) FROM all_sequences WHERE sequence_owner=:1 AND (:2 IS NULL OR :3='' OR sequence_name LIKE :4)`
+		countArgs = []interface{}{schema, keyword, keyword, keyword}
+		dataSQL = `SELECT sequence_name, COALESCE(TO_CHAR(min_value),''), COALESCE(TO_CHAR(increment_by),''), ''
+			FROM all_sequences WHERE sequence_owner=:1 AND (:2 IS NULL OR :3='' OR sequence_name LIKE :4)
+			ORDER BY sequence_name OFFSET :5 ROWS FETCH NEXT :6 ROWS ONLY`
+		dataArgs = []interface{}{schema, keyword, keyword, keyword, offset, opts.PageSize}
+	case ObjectTypeSynonym:
+		countSQL = `SELECT COUNT(*) FROM all_synonyms WHERE owner=:1 AND (:2 IS NULL OR :3='' OR synonym_name LIKE :4)`
+		countArgs = []interface{}{schema, keyword, keyword, keyword}
+		dataSQL = `SELECT synonym_name, COALESCE(table_owner,''), COALESCE(table_name,''), COALESCE(db_link,'')
+			FROM all_synonyms WHERE owner=:1 AND (:2 IS NULL OR :3='' OR synonym_name LIKE :4)
+			ORDER BY synonym_name OFFSET :5 ROWS FETCH NEXT :6 ROWS ONLY`
+		dataArgs = []interface{}{schema, keyword, keyword, keyword, offset, opts.PageSize}
+	case ObjectTypeType:
+		countSQL = `SELECT COUNT(*) FROM all_types WHERE owner=:1 AND (:2 IS NULL OR :3='' OR type_name LIKE :4)`
+		countArgs = []interface{}{schema, keyword, keyword, keyword}
+		dataSQL = `SELECT type_name, COALESCE(typecode,''), '', ''
+			FROM all_types WHERE owner=:1 AND (:2 IS NULL OR :3='' OR type_name LIKE :4)
+			ORDER BY type_name OFFSET :5 ROWS FETCH NEXT :6 ROWS ONLY`
+		dataArgs = []interface{}{schema, keyword, keyword, keyword, offset, opts.PageSize}
+	default:
+		return nil, fmt.Errorf("unsupported object type: %s", objectType)
+	}
+
+	var total int64
+	if err := d.db.QueryRow(countSQL, countArgs...).Scan(&total); err != nil {
+		return nil, fmt.Errorf("count objects failed: %w", err)
+	}
+
+	rows, err := d.db.Query(dataSQL, dataArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("list objects failed: %w", err)
+	}
+	defer rows.Close()
+
+	var objects []DBObject
+	for rows.Next() {
+		var obj DBObject
+		if err := rows.Scan(&obj.Name, &obj.Status, &obj.CreatedAt, &obj.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan object failed: %w", err)
+		}
+		obj.Type = objectType
+		obj.Schema = schema
+		objects = append(objects, obj)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate objects failed: %w", err)
+	}
+	if objects == nil {
+		objects = []DBObject{}
+	}
+
+	return &ListResult{Objects: objects, Total: total, Page: opts.Page, PageSize: opts.PageSize}, nil
+}
+
+func (d *OracleDriver) GetObjectDefinition(schema, objectType, objectName string) (string, error) {
+	if objectType == ObjectTypePackage {
+		spec, err := d.getSourceByType(schema, objectName, "PACKAGE")
+		if err != nil {
+			return "", fmt.Errorf("get package spec failed: %w", err)
+		}
+		body, err := d.getSourceByType(schema, objectName, "PACKAGE BODY")
+		if err != nil {
+			body = "-- Package Body not found"
+		}
+		return spec + "\n/\n" + body, nil
+	}
+
+	if objectType == ObjectTypeMatView {
+		var definition string
+		err := d.db.QueryRow(
+			`SELECT query FROM all_mviews WHERE owner=:1 AND mview_name=:2`,
+			schema, objectName,
+		).Scan(&definition)
+		if err != nil {
+			return "", fmt.Errorf("get matview definition failed: %w", err)
+		}
+		return definition, nil
+	}
+
+	oracleType := mapOracleObjectType(objectType)
+	definition, err := d.getSourceByType(schema, objectName, oracleType)
+	if err != nil {
+		return "", fmt.Errorf("get object definition failed: %w", err)
+	}
+	return definition, nil
+}
+
+func (d *OracleDriver) GetObjectDetail(schema, objectType, objectName string) (map[string]interface{}, error) {
+	detail := make(map[string]interface{})
+	detail["name"] = objectName
+	detail["type"] = objectType
+	detail["schema"] = schema
+
+	switch objectType {
+	case ObjectTypeProcedure, ObjectTypeFunction, ObjectTypePackage:
+		oraType := mapOracleObjectType(objectType)
+		var status, created, altered string
+		err := d.db.QueryRow(
+			`SELECT COALESCE(status,''), TO_CHAR(created,'YYYY-MM-DD HH24:MI:SS'), TO_CHAR(last_ddl_time,'YYYY-MM-DD HH24:MI:SS')
+			 FROM all_objects WHERE owner=:1 AND object_name=:2 AND object_type=:3`,
+			schema, objectName, oraType,
+		).Scan(&status, &created, &altered)
+		if err != nil {
+			return nil, err
+		}
+		detail["status"] = status
+		detail["created_at"] = created
+		detail["updated_at"] = altered
+	case ObjectTypeSequence:
+		var minVal, maxVal, incr, cacheSize, cycleFlag, orderFlag string
+		err := d.db.QueryRow(
+			`SELECT COALESCE(TO_CHAR(min_value),''), COALESCE(TO_CHAR(max_value),''),
+				COALESCE(TO_CHAR(increment_by),''), COALESCE(TO_CHAR(cache_size),''),
+				COALESCE(cycle_flag,''), COALESCE(order_flag,'')
+			 FROM all_sequences WHERE sequence_owner=:1 AND sequence_name=:2`,
+			schema, objectName,
+		).Scan(&minVal, &maxVal, &incr, &cacheSize, &cycleFlag, &orderFlag)
+		if err != nil {
+			return nil, err
+		}
+		detail["min_value"] = minVal
+		detail["max_value"] = maxVal
+		detail["increment_by"] = incr
+		detail["cache_size"] = cacheSize
+		detail["cycle_flag"] = cycleFlag
+		detail["order_flag"] = orderFlag
+	case ObjectTypeSynonym:
+		var tableOwner, tableName, dbLink string
+		err := d.db.QueryRow(
+			`SELECT COALESCE(table_owner,''), COALESCE(table_name,''), COALESCE(db_link,'')
+			 FROM all_synonyms WHERE owner=:1 AND synonym_name=:2`,
+			schema, objectName,
+		).Scan(&tableOwner, &tableName, &dbLink)
+		if err != nil {
+			return nil, err
+		}
+		detail["table_owner"] = tableOwner
+		detail["table_name"] = tableName
+		detail["db_link"] = dbLink
+	case ObjectTypeTrigger:
+		var triggerType, triggeringEvent, tableOwner, tableName, status string
+		err := d.db.QueryRow(
+			`SELECT COALESCE(trigger_type,''), COALESCE(triggering_event,''),
+				COALESCE(table_owner,''), COALESCE(table_name,''), COALESCE(status,'')
+			 FROM all_triggers WHERE owner=:1 AND trigger_name=:2`,
+			schema, objectName,
+		).Scan(&triggerType, &triggeringEvent, &tableOwner, &tableName, &status)
+		if err != nil {
+			return nil, err
+		}
+		detail["trigger_type"] = triggerType
+		detail["triggering_event"] = triggeringEvent
+		detail["table_owner"] = tableOwner
+		detail["table_name"] = tableName
+		detail["status"] = status
+	default:
+		return detail, nil
+	}
+	return detail, nil
+}
+
+func (d *OracleDriver) CheckDependencies(schema, objectType, objectName string) ([]DependencyInfo, error) {
+	var deps []DependencyInfo
+	oraType := mapOracleObjectType(objectType)
+
+	rows, err := d.db.Query(
+		`SELECT name, type, 'references ' || referenced_name || ' (' || referenced_type || ')'
+		 FROM all_dependencies
+		 WHERE owner=:1 AND referenced_name=:2 AND referenced_type=:3 AND name!=:2`,
+		schema, objectName, oraType,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("check dependencies failed: %w", err)
+	}
+	for rows.Next() {
+		var dep DependencyInfo
+		if err := rows.Scan(&dep.DependentName, &dep.DependentType, &dep.Detail); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		dep.Schema = schema
+		deps = append(deps, dep)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+
+	if deps == nil {
+		deps = []DependencyInfo{}
+	}
+	return deps, nil
+}
+
+func (d *OracleDriver) ExecuteObjectDDL(schema, objectType, ddl string) (string, error) {
+	_, err := d.db.Exec(ddl)
+	if err != nil {
+		return "", fmt.Errorf("Oracle DDL execution failed: %w", err)
+	}
+	return fmt.Sprintf("%s object created/modified", objectType), nil
+}
+
+func (d *OracleDriver) GenerateCreateTemplate(objectType, schema, objectName string) (string, error) {
+	name := "{{.ObjectName}}"
+	if objectName != "" {
+		name = objectName
+	}
+	qualified := strings.ToUpper(schema) + "." + strings.ToUpper(name)
+
+	switch objectType {
+	case ObjectTypeProcedure:
+		return `CREATE OR REPLACE PROCEDURE ` + qualified + ` (
+    param1 IN NUMBER
+) AS
+BEGIN
+    -- TODO: procedure logic
+    NULL;
+END;`, nil
+	case ObjectTypeFunction:
+		return `CREATE OR REPLACE FUNCTION ` + qualified + ` (
+    param1 IN NUMBER
+) RETURN NUMBER AS
+BEGIN
+    -- TODO: function logic
+    RETURN param1;
+END;`, nil
+	case ObjectTypePackage:
+		return `CREATE OR REPLACE PACKAGE ` + qualified + ` AS
+    -- TODO: package spec
+    PROCEDURE main_proc(param1 IN NUMBER);
+END;
+/
+CREATE OR REPLACE PACKAGE BODY ` + qualified + ` AS
+    PROCEDURE main_proc(param1 IN NUMBER) AS
+    BEGIN
+        -- TODO: package body
+        NULL;
+    END;
+END;`, nil
+	case ObjectTypeTrigger:
+		return `CREATE OR REPLACE TRIGGER ` + qualified + `
+BEFORE INSERT ON {{.TableName}}
+FOR EACH ROW
+BEGIN
+    -- TODO: trigger logic
+    :NEW.created_at := SYSDATE;
+END;`, nil
+	case ObjectTypeSequence:
+		return `CREATE SEQUENCE ` + qualified + `
+START WITH 1
+INCREMENT BY 1
+MINVALUE 1
+MAXVALUE 9999999999999999999999999999
+NOCACHE
+NOCYCLE;`, nil
+	case ObjectTypeSynonym:
+		return `CREATE OR REPLACE SYNONYM ` + qualified + `
+FOR {{.TargetSchema}}.{{.TargetObject}};`, nil
+	case ObjectTypeMatView:
+		return `CREATE MATERIALIZED VIEW ` + qualified + `
+BUILD IMMEDIATE
+REFRESH COMPLETE ON DEMAND
+AS
+SELECT 1 AS id, 'TODO' AS description FROM dual;`, nil
+	case ObjectTypeType:
+		return `CREATE OR REPLACE TYPE ` + qualified + ` AS OBJECT (
+    field1 NUMBER,
+    field2 VARCHAR2(100)
+);`, nil
+	default:
+		return "", fmt.Errorf("unsupported object type: %s", objectType)
+	}
+}
+
+func (d *OracleDriver) GenerateAlterDDL(schema, objectType, name, newDef string) ([]string, error) {
+	if objectType == ObjectTypePackage {
+		parts := strings.Split(newDef, "\n/\n")
+		if len(parts) == 2 {
+			spec := strings.TrimSpace(parts[0])
+			body := strings.TrimSpace(parts[1])
+			if !strings.HasPrefix(strings.ToUpper(spec), "CREATE") {
+				spec = "CREATE OR REPLACE " + spec
+			}
+			if !strings.HasPrefix(strings.ToUpper(body), "CREATE") {
+				body = "CREATE OR REPLACE PACKAGE BODY " + body
+			}
+			return []string{spec, body}, nil
+		}
+		return []string{newDef}, nil
+	}
+	return []string{newDef}, nil
+}
+
+func (d *OracleDriver) GenerateDropDDL(schema, objectType, name string) (string, error) {
+	qualified := strings.ToUpper(schema) + "." + strings.ToUpper(name)
+	switch objectType {
+	case ObjectTypeProcedure:
+		return fmt.Sprintf("DROP PROCEDURE %s", qualified), nil
+	case ObjectTypeFunction:
+		return fmt.Sprintf("DROP FUNCTION %s", qualified), nil
+	case ObjectTypePackage:
+		return fmt.Sprintf("DROP PACKAGE %s", qualified), nil
+	case ObjectTypeSequence:
+		return fmt.Sprintf("DROP SEQUENCE %s", qualified), nil
+	case ObjectTypeSynonym:
+		return fmt.Sprintf("DROP SYNONYM %s", qualified), nil
+	case ObjectTypeMatView:
+		return fmt.Sprintf("DROP MATERIALIZED VIEW %s", qualified), nil
+	case ObjectTypeTrigger:
+		return fmt.Sprintf("DROP TRIGGER %s", qualified), nil
+	case ObjectTypeType:
+		return fmt.Sprintf("DROP TYPE %s", qualified), nil
+	default:
+		return "", fmt.Errorf("unsupported object type: %s", objectType)
+	}
+}
 

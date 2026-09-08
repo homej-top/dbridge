@@ -22,7 +22,7 @@ func NewServerManagerHandler(dsSvc *service.DataSourceService, logger *zap.Logge
 // GetServerInfo returns basic server information
 func (h *ServerManagerHandler) GetServerInfo(c *gin.Context) {
 	dsID := c.Param("ds_id")
-	driver, _, err := h.dsSvc.Connect(dsID)
+	driver, _, _, err := h.dsSvc.Connect(dsID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error()))
 		return
@@ -41,7 +41,7 @@ func (h *ServerManagerHandler) GetServerInfo(c *gin.Context) {
 // GetMetrics returns current server metrics
 func (h *ServerManagerHandler) GetMetrics(c *gin.Context) {
 	dsID := c.Param("ds_id")
-	driver, _, err := h.dsSvc.Connect(dsID)
+	driver, _, _, err := h.dsSvc.Connect(dsID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error()))
 		return
@@ -60,7 +60,7 @@ func (h *ServerManagerHandler) GetMetrics(c *gin.Context) {
 // GetMetricsV2 returns structured monitoring metrics
 func (h *ServerManagerHandler) GetMetricsV2(c *gin.Context) {
 	dsID := c.Param("ds_id")
-	driver, _, err := h.dsSvc.Connect(dsID)
+	driver, _, _, err := h.dsSvc.Connect(dsID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error()))
 		return
@@ -79,7 +79,7 @@ func (h *ServerManagerHandler) GetMetricsV2(c *gin.Context) {
 // ListDatabases returns database list for a server
 func (h *ServerManagerHandler) ListDatabases(c *gin.Context) {
 	dsID := c.Param("ds_id")
-	driver, _, err := h.dsSvc.Connect(dsID)
+	driver, _, _, err := h.dsSvc.Connect(dsID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error()))
 		return
@@ -107,7 +107,7 @@ func (h *ServerManagerHandler) CreateDatabase(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error()))
 		return
 	}
-	driver, _, err := h.dsSvc.Connect(dsID)
+	driver, _, _, err := h.dsSvc.Connect(dsID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error()))
 		return
@@ -123,7 +123,7 @@ func (h *ServerManagerHandler) CreateDatabase(c *gin.Context) {
 func (h *ServerManagerHandler) DropDatabase(c *gin.Context) {
 	dsID := c.Param("ds_id")
 	dbName := c.Param("name")
-	driver, _, err := h.dsSvc.Connect(dsID)
+	driver, _, _, err := h.dsSvc.Connect(dsID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error()))
 		return
@@ -146,7 +146,7 @@ func (h *ServerManagerHandler) CreateUser(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error()))
 		return
 	}
-	driver, _, err := h.dsSvc.Connect(dsID)
+	driver, _, _, err := h.dsSvc.Connect(dsID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error()))
 		return
@@ -162,7 +162,7 @@ func (h *ServerManagerHandler) CreateUser(c *gin.Context) {
 func (h *ServerManagerHandler) DropUser(c *gin.Context) {
 	dsID := c.Param("ds_id")
 	userName := c.Param("name")
-	driver, _, err := h.dsSvc.Connect(dsID)
+	driver, _, _, err := h.dsSvc.Connect(dsID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error()))
 		return
@@ -186,7 +186,7 @@ func (h *ServerManagerHandler) GrantPrivileges(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error()))
 		return
 	}
-	driver, _, err := h.dsSvc.Connect(dsID)
+	driver, _, _, err := h.dsSvc.Connect(dsID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error()))
 		return
@@ -202,7 +202,7 @@ func (h *ServerManagerHandler) GrantPrivileges(c *gin.Context) {
 // GetCapability returns version and capability flags
 func (h *ServerManagerHandler) GetCapability(c *gin.Context) {
 	dsID := c.Param("ds_id")
-	driver, _, err := h.dsSvc.Connect(dsID)
+	driver, _, _, err := h.dsSvc.Connect(dsID)
 	if err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
 	defer driver.Close()
 	cs, err := driver.DetectCapability()
@@ -219,7 +219,7 @@ func (h *ServerManagerHandler) ListRoles(c *gin.Context) {
 	if database != "" {
 		driver, err = h.dsSvc.ConnectForDB(dsID, database)
 	} else {
-		driver, _, err = h.dsSvc.Connect(dsID)
+		driver, _, _, err = h.dsSvc.Connect(dsID)
 	}
 	if err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
 	defer driver.Close()
@@ -238,7 +238,7 @@ func (h *ServerManagerHandler) CreateRole(c *gin.Context) {
 	if req.Database != "" {
 		driver, err = h.dsSvc.ConnectForDB(dsID, req.Database)
 	} else {
-		driver, _, err = h.dsSvc.Connect(dsID)
+		driver, _, _, err = h.dsSvc.Connect(dsID)
 	}
 	if err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
 	defer driver.Close()
@@ -254,7 +254,7 @@ func (h *ServerManagerHandler) DropRole(c *gin.Context) {
 	if database != "" {
 		driver, err = h.dsSvc.ConnectForDB(dsID, database)
 	} else {
-		driver, _, err = h.dsSvc.Connect(dsID)
+		driver, _, _, err = h.dsSvc.Connect(dsID)
 	}
 	if err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
 	defer driver.Close()
@@ -271,7 +271,7 @@ func (h *ServerManagerHandler) AddRoleMember(c *gin.Context) {
 	if req.Database != "" {
 		driver, err = h.dsSvc.ConnectForDB(dsID, req.Database)
 	} else {
-		driver, _, err = h.dsSvc.Connect(dsID)
+		driver, _, _, err = h.dsSvc.Connect(dsID)
 	}
 	if err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
 	defer driver.Close()
@@ -287,7 +287,7 @@ func (h *ServerManagerHandler) RemoveRoleMember(c *gin.Context) {
 	if database != "" {
 		driver, err = h.dsSvc.ConnectForDB(dsID, database)
 	} else {
-		driver, _, err = h.dsSvc.Connect(dsID)
+		driver, _, _, err = h.dsSvc.Connect(dsID)
 	}
 	if err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
 	defer driver.Close()
@@ -300,7 +300,7 @@ func (h *ServerManagerHandler) RemoveRoleMember(c *gin.Context) {
 func (h *ServerManagerHandler) GetUserPrivileges(c *gin.Context) {
 	dsID := c.Param("ds_id")
 	userName := c.Param("name")
-	driver, _, err := h.dsSvc.Connect(dsID)
+	driver, _, _, err := h.dsSvc.Connect(dsID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error()))
 		return
@@ -333,7 +333,7 @@ func (h *ServerManagerHandler) ApplyUserPrivileges(c *gin.Context) {
 	if req.Database != "" {
 		driver, err = h.dsSvc.ConnectForDB(dsID, req.Database)
 	} else {
-		driver, _, err = h.dsSvc.Connect(dsID)
+		driver, _, _, err = h.dsSvc.Connect(dsID)
 	}
 	if err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
 	defer driver.Close()
@@ -346,7 +346,7 @@ func (h *ServerManagerHandler) ApplyUserPrivileges(c *gin.Context) {
 // ListProcesses returns current process/session list
 func (h *ServerManagerHandler) ListProcesses(c *gin.Context) {
 	dsID := c.Param("ds_id")
-	driver, ds, err := h.dsSvc.Connect(dsID)
+	driver, _, ds, err := h.dsSvc.Connect(dsID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error()))
 		return
@@ -368,7 +368,7 @@ func (h *ServerManagerHandler) ListProcesses(c *gin.Context) {
 // ListUsers returns user list for a server
 func (h *ServerManagerHandler) ListUsers(c *gin.Context) {
 	dsID := c.Param("ds_id")
-	driver, ds, err := h.dsSvc.Connect(dsID)
+	driver, _, ds, err := h.dsSvc.Connect(dsID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error()))
 		return
@@ -390,7 +390,7 @@ func (h *ServerManagerHandler) ListUsers(c *gin.Context) {
 // ListTablespaces returns tablespace info (Oracle/PG)
 func (h *ServerManagerHandler) ListTablespaces(c *gin.Context) {
 	dsID := c.Param("ds_id")
-	driver, ds, err := h.dsSvc.Connect(dsID)
+	driver, _, ds, err := h.dsSvc.Connect(dsID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error()))
 		return
@@ -414,7 +414,7 @@ func (h *ServerManagerHandler) AlterUserPassword(c *gin.Context) {
 	dsID := c.Param("ds_id"); userName := c.Param("name")
 	var req struct{ Password string `json:"password"` }
 	if err := c.ShouldBindJSON(&req); err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
-	driver, _, err := h.dsSvc.Connect(dsID)
+	driver, _, _, err := h.dsSvc.Connect(dsID)
 	if err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
 	defer driver.Close()
 	if err := driver.AlterUserPassword(userName, req.Password); err != nil { c.JSON(http.StatusInternalServerError, model.ErrorResponse(model.CodeDatabaseError, err.Error())); return }
@@ -426,7 +426,7 @@ func (h *ServerManagerHandler) AlterUserLock(c *gin.Context) {
 	dsID := c.Param("ds_id"); userName := c.Param("name")
 	var req struct{ Lock bool `json:"lock"` }
 	if err := c.ShouldBindJSON(&req); err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
-	driver, _, err := h.dsSvc.Connect(dsID)
+	driver, _, _, err := h.dsSvc.Connect(dsID)
 	if err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
 	defer driver.Close()
 	if err := driver.AlterUserLock(userName, req.Lock); err != nil { c.JSON(http.StatusInternalServerError, model.ErrorResponse(model.CodeDatabaseError, err.Error())); return }
@@ -438,7 +438,7 @@ func (h *ServerManagerHandler) AlterUserRename(c *gin.Context) {
 	dsID := c.Param("ds_id"); userName := c.Param("name")
 	var req struct{ NewName string `json:"new_name"` }
 	if err := c.ShouldBindJSON(&req); err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
-	driver, _, err := h.dsSvc.Connect(dsID)
+	driver, _, _, err := h.dsSvc.Connect(dsID)
 	if err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
 	defer driver.Close()
 	if err := driver.AlterUserRename(userName, req.NewName); err != nil { c.JSON(http.StatusInternalServerError, model.ErrorResponse(model.CodeDatabaseError, err.Error())); return }
@@ -450,7 +450,7 @@ func (h *ServerManagerHandler) AlterUserDefaultSchema(c *gin.Context) {
 	dsID := c.Param("ds_id"); userName := c.Param("name")
 	var req struct{ Schema string `json:"schema"` }
 	if err := c.ShouldBindJSON(&req); err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
-	driver, _, err := h.dsSvc.Connect(dsID)
+	driver, _, _, err := h.dsSvc.Connect(dsID)
 	if err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
 	defer driver.Close()
 	if err := driver.AlterUserDefaultSchema(userName, req.Schema); err != nil { c.JSON(http.StatusInternalServerError, model.ErrorResponse(model.CodeDatabaseError, err.Error())); return }
@@ -466,7 +466,7 @@ func (h *ServerManagerHandler) GetRolePrivileges(c *gin.Context) {
 	if database != "" {
 		driver, err = h.dsSvc.ConnectForDB(dsID, database)
 	} else {
-		driver, _, err = h.dsSvc.Connect(dsID)
+		driver, _, _, err = h.dsSvc.Connect(dsID)
 	}
 	if err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
 	defer driver.Close()
@@ -490,7 +490,7 @@ func (h *ServerManagerHandler) AlterRoleAttribute(c *gin.Context) {
 	dsID := c.Param("ds_id"); roleName := c.Param("name")
 	var req struct{ Attribute string `json:"attribute"`; Value string `json:"value"` }
 	if err := c.ShouldBindJSON(&req); err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
-	driver, _, err := h.dsSvc.Connect(dsID)
+	driver, _, _, err := h.dsSvc.Connect(dsID)
 	if err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
 	defer driver.Close()
 	if err := driver.AlterRoleAttribute(roleName, req.Attribute, req.Value); err != nil { c.JSON(http.StatusInternalServerError, model.ErrorResponse(model.CodeDatabaseError, err.Error())); return }
@@ -502,7 +502,7 @@ func (h *ServerManagerHandler) AlterRoleAttribute(c *gin.Context) {
 // ListLogins returns SQL Server instance-level login list
 func (h *ServerManagerHandler) ListLogins(c *gin.Context) {
 	dsID := c.Param("ds_id")
-	driver, _, err := h.dsSvc.Connect(dsID)
+	driver, _, _, err := h.dsSvc.Connect(dsID)
 	if err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
 	defer driver.Close()
 
@@ -517,7 +517,7 @@ func (h *ServerManagerHandler) CreateLogin(c *gin.Context) {
 	dsID := c.Param("ds_id")
 	var req drivers.CreateLoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
-	driver, _, err := h.dsSvc.Connect(dsID)
+	driver, _, _, err := h.dsSvc.Connect(dsID)
 	if err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
 	defer driver.Close()
 	if err := driver.CreateLogin(req); err != nil { c.JSON(http.StatusInternalServerError, model.ErrorResponse(model.CodeDatabaseError, err.Error())); return }
@@ -527,7 +527,7 @@ func (h *ServerManagerHandler) CreateLogin(c *gin.Context) {
 // GetLoginDetail returns login details including server roles and DB user mappings
 func (h *ServerManagerHandler) GetLoginDetail(c *gin.Context) {
 	dsID := c.Param("ds_id"); loginName := c.Param("name")
-	driver, _, err := h.dsSvc.Connect(dsID)
+	driver, _, _, err := h.dsSvc.Connect(dsID)
 	if err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
 	defer driver.Close()
 	detail, err := driver.GetLoginDetail(loginName)
@@ -540,7 +540,7 @@ func (h *ServerManagerHandler) AlterLogin(c *gin.Context) {
 	dsID := c.Param("ds_id"); loginName := c.Param("name")
 	var req drivers.AlterLoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
-	driver, _, err := h.dsSvc.Connect(dsID)
+	driver, _, _, err := h.dsSvc.Connect(dsID)
 	if err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
 	defer driver.Close()
 	if err := driver.AlterLogin(loginName, req); err != nil { c.JSON(http.StatusInternalServerError, model.ErrorResponse(model.CodeDatabaseError, err.Error())); return }
@@ -551,7 +551,7 @@ func (h *ServerManagerHandler) AlterLogin(c *gin.Context) {
 func (h *ServerManagerHandler) DropLogin(c *gin.Context) {
 	dsID := c.Param("ds_id"); loginName := c.Param("name")
 	cascade := c.Query("cascade") == "true"
-	driver, _, err := h.dsSvc.Connect(dsID)
+	driver, _, _, err := h.dsSvc.Connect(dsID)
 	if err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
 	defer driver.Close()
 	result, err := driver.DropLogin(loginName, cascade)
@@ -564,7 +564,7 @@ func (h *ServerManagerHandler) DropLogin(c *gin.Context) {
 // ListDatabaseUsers returns users in a specific database
 func (h *ServerManagerHandler) ListDatabaseUsers(c *gin.Context) {
 	dsID := c.Param("ds_id"); database := c.Param("db")
-	driver, _, err := h.dsSvc.Connect(dsID)
+	driver, _, _, err := h.dsSvc.Connect(dsID)
 	if err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
 	defer driver.Close()
 	users, err := driver.ListDatabaseUsers(database)
@@ -578,7 +578,7 @@ func (h *ServerManagerHandler) CreateDatabaseUser(c *gin.Context) {
 	dsID := c.Param("ds_id"); database := c.Param("db")
 	var req drivers.CreateDBUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
-	driver, _, err := h.dsSvc.Connect(dsID)
+	driver, _, _, err := h.dsSvc.Connect(dsID)
 	if err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
 	defer driver.Close()
 	if err := driver.CreateDatabaseUser(database, req); err != nil { c.JSON(http.StatusInternalServerError, model.ErrorResponse(model.CodeDatabaseError, err.Error())); return }
@@ -588,7 +588,7 @@ func (h *ServerManagerHandler) CreateDatabaseUser(c *gin.Context) {
 // DropDatabaseUser deletes a database user
 func (h *ServerManagerHandler) DropDatabaseUser(c *gin.Context) {
 	dsID := c.Param("ds_id"); database := c.Param("db"); userName := c.Param("name")
-	driver, _, err := h.dsSvc.Connect(dsID)
+	driver, _, _, err := h.dsSvc.Connect(dsID)
 	if err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
 	defer driver.Close()
 	if err := driver.DropDatabaseUser(database, userName); err != nil { c.JSON(http.StatusInternalServerError, model.ErrorResponse(model.CodeDatabaseError, err.Error())); return }
@@ -600,7 +600,7 @@ func (h *ServerManagerHandler) BatchCreateDatabaseUsers(c *gin.Context) {
 	dsID := c.Param("ds_id"); loginName := c.Param("name")
 	var req struct{ Mappings []drivers.DBUserMapping `json:"mappings"` }
 	if err := c.ShouldBindJSON(&req); err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
-	driver, _, err := h.dsSvc.Connect(dsID)
+	driver, _, _, err := h.dsSvc.Connect(dsID)
 	if err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
 	defer driver.Close()
 	if err := driver.BatchCreateDatabaseUsers(loginName, req.Mappings); err != nil { c.JSON(http.StatusInternalServerError, model.ErrorResponse(model.CodeDatabaseError, err.Error())); return }
@@ -612,7 +612,7 @@ func (h *ServerManagerHandler) BatchCreateDatabaseUsers(c *gin.Context) {
 // DetectOrphanedUsers detects orphaned database users
 func (h *ServerManagerHandler) DetectOrphanedUsers(c *gin.Context) {
 	dsID := c.Param("ds_id"); database := c.Param("db")
-	driver, _, err := h.dsSvc.Connect(dsID)
+	driver, _, _, err := h.dsSvc.Connect(dsID)
 	if err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
 	defer driver.Close()
 	users, err := driver.DetectOrphanedUsers(database)
@@ -626,7 +626,7 @@ func (h *ServerManagerHandler) FixOrphanedUser(c *gin.Context) {
 	dsID := c.Param("ds_id"); database := c.Param("db"); userName := c.Param("name")
 	var req struct{ LoginName string `json:"login_name"` }
 	if err := c.ShouldBindJSON(&req); err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
-	driver, _, err := h.dsSvc.Connect(dsID)
+	driver, _, _, err := h.dsSvc.Connect(dsID)
 	if err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
 	defer driver.Close()
 	if err := driver.FixOrphanedUser(database, userName, req.LoginName); err != nil { c.JSON(http.StatusInternalServerError, model.ErrorResponse(model.CodeDatabaseError, err.Error())); return }
@@ -644,7 +644,7 @@ func (h *ServerManagerHandler) GetEffectivePermissions(c *gin.Context) {
 		ObjectName    string `json:"object_name"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
-	driver, _, err := h.dsSvc.Connect(dsID)
+	driver, _, _, err := h.dsSvc.Connect(dsID)
 	if err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
 	defer driver.Close()
 	result, err := driver.GetEffectivePermissions(database, req.PrincipalName, req.ObjectType, req.ObjectName)
@@ -657,7 +657,7 @@ func (h *ServerManagerHandler) GetEffectivePermissions(c *gin.Context) {
 // CheckGuestStatus returns guest user status for compliance check
 func (h *ServerManagerHandler) CheckGuestStatus(c *gin.Context) {
 	dsID := c.Param("ds_id"); database := c.Param("db")
-	driver, _, err := h.dsSvc.Connect(dsID)
+	driver, _, _, err := h.dsSvc.Connect(dsID)
 	if err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
 	defer driver.Close()
 	status, err := driver.CheckGuestStatus(database)
@@ -668,7 +668,7 @@ func (h *ServerManagerHandler) CheckGuestStatus(c *gin.Context) {
 // DisableGuest disables the guest user in a database
 func (h *ServerManagerHandler) DisableGuest(c *gin.Context) {
 	dsID := c.Param("ds_id"); database := c.Param("db")
-	driver, _, err := h.dsSvc.Connect(dsID)
+	driver, _, _, err := h.dsSvc.Connect(dsID)
 	if err != nil { c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error())); return }
 	defer driver.Close()
 	if err := driver.DisableGuest(database); err != nil { c.JSON(http.StatusInternalServerError, model.ErrorResponse(model.CodeDatabaseError, err.Error())); return }

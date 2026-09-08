@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -27,7 +28,7 @@ func NewMySQLDriver(cfg DriverConfig) (DatabaseDriver, *sql.DB, error) {
 		if port == 0 {
 			port = 3306
 		}
-		dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?timeout=10s&readTimeout=30s&parseTime=true",
+		dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?timeout=10s&readTimeout=30s&parseTime=true&multiStatements=true",
 			cfg.Username, cfg.Password, cfg.Host, port, cfg.Database)
 		var err error
 		db, err = sql.Open("mysql", dsn)
@@ -855,11 +856,16 @@ func (d *MySQLDriver) GetTreeMetadata() TreeMetadata {
 			{Key: "database", Label: "Database", LabelKey: "tree.database", PlaceholderKey: "tree.db_name_hint", Icon: "DatabaseOutlined"},
 			{Key: "tables_folder", Label: "Tables", LabelKey: "tree.tables", Icon: "TableOutlined"},
 			{Key: "views_folder", Label: "Views", LabelKey: "tree.views", Icon: "EyeOutlined"},
+			{Key: "procedure_folder", Label: "Procedures", LabelKey: "tree.procedures", Icon: "CodeOutlined"},
+			{Key: "function_folder", Label: "Functions", LabelKey: "tree.functions", Icon: "FunctionOutlined"},
+			{Key: "trigger_folder", Label: "Triggers", LabelKey: "tree.triggers", Icon: "ThunderboltOutlined"},
+			{Key: "event_folder", Label: "Events", LabelKey: "tree.events", Icon: "CalendarOutlined"},
 		},
 		AllowCreate: map[string]bool{"database": true},
 		SystemFilter: &SystemFilter{
 			ExcludeNames: []string{"information_schema", "performance_schema", "mysql", "sys"},
 		},
+		SupportedObjectTypes: []string{ObjectTypeProcedure, ObjectTypeFunction, ObjectTypeTrigger, ObjectTypeEvent},
 	}
 }
 
@@ -1386,4 +1392,355 @@ func (d *MySQLDriver) SQLIsNull(col, defaultVal string) string {
 }
 func (d *MySQLDriver) SQLCurrentTimestamp() string { return "NOW()" }
 func (d *MySQLDriver) SQLQuoteIdent(name string) string { return "`" + name + "`" }
+
+// ─── Database Object Management ─────────────────────────────────────────
+
+func (d *MySQLDriver) SupportedObjectTypes() []string {
+	return []string{ObjectTypeProcedure, ObjectTypeFunction, ObjectTypeTrigger, ObjectTypeEvent}
+}
+
+func (d *MySQLDriver) ListObjectsByType(schema, objectType string, opts ListOptions) (*ListResult, error) {
+	keyword := "%" + opts.Keyword + "%"
+	offset := (opts.Page - 1) * opts.PageSize
+
+	var countSQL, dataSQL string
+	var countArgs, dataArgs []interface{}
+
+	switch objectType {
+	case ObjectTypeProcedure:
+		countSQL = `SELECT COUNT(*) FROM information_schema.ROUTINES
+			WHERE ROUTINE_SCHEMA=? AND ROUTINE_TYPE='PROCEDURE' AND (?='' OR ROUTINE_NAME LIKE ?)`
+		countArgs = []interface{}{schema, opts.Keyword, keyword}
+		dataSQL = `SELECT ROUTINE_NAME, COALESCE(ROUTINE_COMMENT,''), CREATED, LAST_ALTERED
+			FROM information_schema.ROUTINES
+			WHERE ROUTINE_SCHEMA=? AND ROUTINE_TYPE='PROCEDURE' AND (?='' OR ROUTINE_NAME LIKE ?)
+			ORDER BY ROUTINE_NAME LIMIT ? OFFSET ?`
+		dataArgs = []interface{}{schema, opts.Keyword, keyword, opts.PageSize, offset}
+	case ObjectTypeFunction:
+		countSQL = `SELECT COUNT(*) FROM information_schema.ROUTINES
+			WHERE ROUTINE_SCHEMA=? AND ROUTINE_TYPE='FUNCTION' AND (?='' OR ROUTINE_NAME LIKE ?)`
+		countArgs = []interface{}{schema, opts.Keyword, keyword}
+		dataSQL = `SELECT ROUTINE_NAME, COALESCE(ROUTINE_COMMENT,''), CREATED, LAST_ALTERED
+			FROM information_schema.ROUTINES
+			WHERE ROUTINE_SCHEMA=? AND ROUTINE_TYPE='FUNCTION' AND (?='' OR ROUTINE_NAME LIKE ?)
+			ORDER BY ROUTINE_NAME LIMIT ? OFFSET ?`
+		dataArgs = []interface{}{schema, opts.Keyword, keyword, opts.PageSize, offset}
+	case ObjectTypeTrigger:
+		countSQL = `SELECT COUNT(*) FROM information_schema.TRIGGERS
+			WHERE TRIGGER_SCHEMA=? AND (?='' OR TRIGGER_NAME LIKE ?)`
+		countArgs = []interface{}{schema, opts.Keyword, keyword}
+		dataSQL = `SELECT TRIGGER_NAME, COALESCE(ACTION_TIMING,'') || ' ' || COALESCE(EVENT_MANIPULATION,'') || ' ON ' || COALESCE(EVENT_OBJECT_TABLE,''),
+			CREATED, CREATED
+			FROM information_schema.TRIGGERS
+			WHERE TRIGGER_SCHEMA=? AND (?='' OR TRIGGER_NAME LIKE ?)
+			ORDER BY TRIGGER_NAME LIMIT ? OFFSET ?`
+		dataArgs = []interface{}{schema, opts.Keyword, keyword, opts.PageSize, offset}
+	case ObjectTypeEvent:
+		countSQL = `SELECT COUNT(*) FROM information_schema.EVENTS
+			WHERE EVENT_SCHEMA=? AND (?='' OR EVENT_NAME LIKE ?)`
+		countArgs = []interface{}{schema, opts.Keyword, keyword}
+		dataSQL = `SELECT EVENT_NAME, COALESCE(STATUS,''), CREATED, LAST_ALTERED
+			FROM information_schema.EVENTS
+			WHERE EVENT_SCHEMA=? AND (?='' OR EVENT_NAME LIKE ?)
+			ORDER BY EVENT_NAME LIMIT ? OFFSET ?`
+		dataArgs = []interface{}{schema, opts.Keyword, keyword, opts.PageSize, offset}
+	default:
+		return nil, fmt.Errorf("unsupported object type: %s", objectType)
+	}
+
+	var total int64
+	if err := d.db.QueryRow(countSQL, countArgs...).Scan(&total); err != nil {
+		return nil, fmt.Errorf("count objects failed: %w", err)
+	}
+
+	rows, err := d.db.Query(dataSQL, dataArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("list objects failed: %w", err)
+	}
+	defer rows.Close()
+
+	var objects []DBObject
+	for rows.Next() {
+		var obj DBObject
+		if err := rows.Scan(&obj.Name, &obj.Comment, &obj.CreatedAt, &obj.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan object failed: %w", err)
+		}
+		obj.Type = objectType
+		obj.Schema = schema
+		objects = append(objects, obj)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate objects failed: %w", err)
+	}
+	if objects == nil {
+		objects = []DBObject{}
+	}
+
+	return &ListResult{Objects: objects, Total: total, Page: opts.Page, PageSize: opts.PageSize}, nil
+}
+
+func (d *MySQLDriver) GetObjectDefinition(schema, objectType, objectName string) (string, error) {
+	var definition string
+	escapeID := func(s string) string { return "`" + strings.ReplaceAll(s, "`", "``") + "`" }
+	switch objectType {
+	case ObjectTypeProcedure:
+		var name, sqlMode, createDDL, charset, collation, dbCollation string
+		err := d.db.QueryRow("SHOW CREATE PROCEDURE " + escapeID(schema) + "." + escapeID(objectName)).Scan(&name, &sqlMode, &createDDL, &charset, &collation, &dbCollation)
+		if err != nil {
+			return "", fmt.Errorf("get procedure definition failed: %w", err)
+		}
+		createDDL = strings.Replace(createDDL, "PROCEDURE `"+name+"`", "PROCEDURE "+escapeID(schema)+"."+escapeID(name), 1)
+		definition = createDDL
+	case ObjectTypeFunction:
+		var name, sqlMode, createDDL, charset, collation, dbCollation string
+		err := d.db.QueryRow("SHOW CREATE FUNCTION " + escapeID(schema) + "." + escapeID(objectName)).Scan(&name, &sqlMode, &createDDL, &charset, &collation, &dbCollation)
+		if err != nil {
+			return "", fmt.Errorf("get function definition failed: %w", err)
+		}
+		createDDL = strings.Replace(createDDL, "FUNCTION `"+name+"`", "FUNCTION "+escapeID(schema)+"."+escapeID(name), 1)
+		definition = createDDL
+	case ObjectTypeTrigger:
+		var name, sqlMode, createDDL, charset, collation, dbCollation, created string
+		err := d.db.QueryRow("SHOW CREATE TRIGGER " + escapeID(schema) + "." + escapeID(objectName)).Scan(&name, &sqlMode, &createDDL, &charset, &collation, &dbCollation, &created)
+		if err != nil {
+			return "", fmt.Errorf("get trigger definition failed: %w", err)
+		}
+		definition = createDDL
+	case ObjectTypeEvent:
+		var name, sqlMode, status, createDDL, charset, collation, dbCollation string
+		err := d.db.QueryRow("SHOW CREATE EVENT " + escapeID(schema) + "." + escapeID(objectName)).Scan(&name, &sqlMode, &status, &createDDL, &charset, &collation, &dbCollation)
+		if err != nil {
+			return "", fmt.Errorf("get event definition failed: %w", err)
+		}
+		definition = createDDL
+	default:
+		return "", fmt.Errorf("unsupported object type: %s", objectType)
+	}
+	return definition, nil
+}
+
+func (d *MySQLDriver) GetObjectDetail(schema, objectType, objectName string) (map[string]interface{}, error) {
+	detail := make(map[string]interface{})
+	detail["name"] = objectName
+	detail["type"] = objectType
+	detail["schema"] = schema
+
+	switch objectType {
+	case ObjectTypeProcedure, ObjectTypeFunction:
+		routineType := "PROCEDURE"
+		if objectType == ObjectTypeFunction {
+			routineType = "FUNCTION"
+		}
+		var dataTypes, paramList, comment, created, altered string
+		err := d.db.QueryRow(
+			`SELECT COALESCE(DATA_TYPE,''), COALESCE(DTD_IDENTIFIER,''),
+				COALESCE(ROUTINE_COMMENT,''), COALESCE(CREATED,''), COALESCE(LAST_ALTERED,'')
+			 FROM information_schema.ROUTINES
+			 WHERE ROUTINE_SCHEMA=? AND ROUTINE_NAME=? AND ROUTINE_TYPE=?`,
+			schema, objectName, routineType,
+		).Scan(&dataTypes, &paramList, &comment, &created, &altered)
+		if err != nil {
+			return nil, fmt.Errorf("get routine detail failed: %w", err)
+		}
+		detail["data_type"] = dataTypes
+		detail["param_list"] = paramList
+		detail["comment"] = comment
+		detail["created_at"] = created
+		detail["updated_at"] = altered
+	case ObjectTypeTrigger:
+		var timing, event, table, statement, created string
+		err := d.db.QueryRow(
+			`SELECT COALESCE(ACTION_TIMING,''), COALESCE(EVENT_MANIPULATION,''),
+				COALESCE(EVENT_OBJECT_TABLE,''), COALESCE(ACTION_STATEMENT,''),
+				COALESCE(CREATED,'')
+			 FROM information_schema.TRIGGERS
+			 WHERE TRIGGER_SCHEMA=? AND TRIGGER_NAME=?`,
+			schema, objectName,
+		).Scan(&timing, &event, &table, &statement, &created)
+		if err != nil {
+			return nil, fmt.Errorf("get trigger detail failed: %w", err)
+		}
+		detail["action_timing"] = timing
+		detail["event_manipulation"] = event
+		detail["event_table"] = table
+		detail["created_at"] = created
+	case ObjectTypeEvent:
+		var eventType, executeAt, intervalVal, intervalField, status, created, altered string
+		err := d.db.QueryRow(
+			`SELECT COALESCE(EVENT_TYPE,''), COALESCE(EXECUTE_AT,''),
+				COALESCE(INTERVAL_VALUE,''), COALESCE(INTERVAL_FIELD,''),
+				COALESCE(STATUS,''), COALESCE(CREATED,''), COALESCE(LAST_ALTERED,'')
+			 FROM information_schema.EVENTS
+			 WHERE EVENT_SCHEMA=? AND EVENT_NAME=?`,
+			schema, objectName,
+		).Scan(&eventType, &executeAt, &intervalVal, &intervalField, &status, &created, &altered)
+		if err != nil {
+			return nil, fmt.Errorf("get event detail failed: %w", err)
+		}
+		detail["event_type"] = eventType
+		detail["execute_at"] = executeAt
+		detail["interval_value"] = intervalVal
+		detail["interval_field"] = intervalField
+		detail["status"] = status
+		detail["created_at"] = created
+		detail["updated_at"] = altered
+	default:
+		return nil, fmt.Errorf("unsupported object type: %s", objectType)
+	}
+
+	return detail, nil
+}
+
+func (d *MySQLDriver) CheckDependencies(schema, objectType, objectName string) ([]DependencyInfo, error) {
+	var deps []DependencyInfo
+	boundaryPattern := `\b` + regexp.QuoteMeta(objectName) + `\b`
+
+	rows, err := d.db.Query(
+		`SELECT ROUTINE_NAME, ROUTINE_TYPE
+		 FROM information_schema.ROUTINES
+		 WHERE ROUTINE_SCHEMA = ?
+		   AND ROUTINE_NAME != ?
+		   AND COALESCE(ROUTINE_DEFINITION, '') REGEXP ?`,
+		schema, objectName, boundaryPattern,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("check routine dependencies failed: %w", err)
+	}
+	for rows.Next() {
+		var dep DependencyInfo
+		if err := rows.Scan(&dep.DependentName, &dep.DependentType); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		dep.Schema = schema
+		dep.Detail = fmt.Sprintf("definition references %s (text match, may have false positives)", objectName)
+		deps = append(deps, dep)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+
+	rows2, err := d.db.Query(
+		`SELECT TRIGGER_NAME
+		 FROM information_schema.TRIGGERS
+		 WHERE TRIGGER_SCHEMA = ?
+		   AND ACTION_STATEMENT REGEXP ?`,
+		schema, boundaryPattern,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("check trigger dependencies failed: %w", err)
+	}
+	for rows2.Next() {
+		var name string
+		if err := rows2.Scan(&name); err != nil {
+			rows2.Close()
+			return nil, err
+		}
+		deps = append(deps, DependencyInfo{
+			DependentName: name, DependentType: "trigger",
+			Schema: schema, Detail: fmt.Sprintf("trigger body references %s (text match, may have false positives)", objectName),
+		})
+	}
+	if err := rows2.Err(); err != nil {
+		rows2.Close()
+		return nil, err
+	}
+	rows2.Close()
+
+	if deps == nil {
+		deps = []DependencyInfo{}
+	}
+	return deps, nil
+}
+
+func (d *MySQLDriver) ExecuteObjectDDL(schema, objectType, ddl string) (string, error) {
+	// For MySQL, we need to switch to the correct database context before executing DDL
+	// This is especially important for triggers which are bound to tables in a specific database
+	if _, err := d.db.Exec("USE " + "`" + schema + "`"); err != nil {
+		return "", fmt.Errorf("failed to switch to database %s: %w", schema, err)
+	}
+	
+	_, err := d.db.Exec(ddl)
+	if err != nil {
+		return "", fmt.Errorf("MySQL DDL execution failed: %w", err)
+	}
+	return fmt.Sprintf("%s object created/modified (MySQL auto-commit)", objectType), nil
+}
+
+func (d *MySQLDriver) GenerateCreateTemplate(objectType, schema, objectName string) (string, error) {
+	name := "{{.ObjectName}}"
+	if objectName != "" {
+		name = objectName
+	}
+	q := func(s string) string { return "`" + s + "`" }
+
+	switch objectType {
+	case ObjectTypeProcedure:
+		return `CREATE PROCEDURE ` + q(schema) + `.` + q(name) + `(IN param1 INT)
+BEGIN
+    -- TODO: procedure logic
+    SELECT param1;
+END;`, nil
+	case ObjectTypeFunction:
+		return `CREATE FUNCTION ` + q(schema) + `.` + q(name) + `(param1 INT)
+RETURNS INT
+DETERMINISTIC
+BEGIN
+    -- TODO: function logic
+    RETURN param1;
+END;`, nil
+	case ObjectTypeTrigger:
+		return `CREATE TRIGGER ` + q(name) + `
+{{.EventTiming}} {{.EventOperation}} ON ` + q("{{.TableName}}") + `
+FOR EACH ROW
+BEGIN
+    -- TODO: trigger logic
+    -- EventTiming: BEFORE or AFTER
+    -- EventOperation: INSERT, UPDATE or DELETE
+END;`, nil
+	case ObjectTypeEvent:
+		return `CREATE EVENT ` + q(schema) + `.` + q(name) + `
+ON SCHEDULE EVERY 1 DAY
+STARTS CURRENT_TIMESTAMP
+DO
+BEGIN
+    -- TODO: event logic
+END;`, nil
+	default:
+		return "", fmt.Errorf("unsupported object type: %s", objectType)
+	}
+}
+
+func (d *MySQLDriver) GenerateAlterDDL(schema, objectType, name, newDef string) ([]string, error) {
+	switch objectType {
+	case ObjectTypeProcedure, ObjectTypeFunction, ObjectTypeTrigger:
+		dropDDL, err := d.GenerateDropDDL(schema, objectType, name)
+		if err != nil {
+			return nil, err
+		}
+		return []string{dropDDL, newDef}, nil
+	case ObjectTypeEvent:
+		return []string{newDef}, nil
+	default:
+		return nil, fmt.Errorf("unsupported object type: %s", objectType)
+	}
+}
+
+func (d *MySQLDriver) GenerateDropDDL(schema, objectType, name string) (string, error) {
+	q := func(s string) string { return "`" + s + "`" }
+	switch objectType {
+	case ObjectTypeProcedure:
+		return fmt.Sprintf("DROP PROCEDURE %s.%s", q(schema), q(name)), nil
+	case ObjectTypeFunction:
+		return fmt.Sprintf("DROP FUNCTION %s.%s", q(schema), q(name)), nil
+	case ObjectTypeTrigger:
+		return fmt.Sprintf("DROP TRIGGER %s.%s", q(schema), q(name)), nil
+	case ObjectTypeEvent:
+		return fmt.Sprintf("DROP EVENT %s.%s", q(schema), q(name)), nil
+	default:
+		return "", fmt.Errorf("unsupported object type: %s", objectType)
+	}
+}
 

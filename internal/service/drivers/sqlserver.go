@@ -1089,12 +1089,16 @@ func (d *SQLServerDriver) GetTreeMetadata() TreeMetadata {
 			{Key: "schema", Label: "Schema", LabelKey: "tree.schema", PlaceholderKey: "tree.schema_name_hint", Icon: "ClusterOutlined"},
 			{Key: "tables_folder", Label: "Tables", LabelKey: "tree.tables", Icon: "TableOutlined"},
 			{Key: "views_folder", Label: "Views", LabelKey: "tree.views", Icon: "EyeOutlined"},
+			{Key: "procedure_folder", Label: "Procedures", LabelKey: "tree.procedures", Icon: "CodeOutlined"},
+			{Key: "function_folder", Label: "Functions", LabelKey: "tree.functions", Icon: "FunctionOutlined"},
+			{Key: "trigger_folder", Label: "Triggers", LabelKey: "tree.triggers", Icon: "ThunderboltOutlined"},
 		},
 		AllowCreate: map[string]bool{"database": true, "schema": true},
 		SystemFilter: &SystemFilter{
 			ExcludeNames: []string{"sys", "INFORMATION_SCHEMA"},
 			ExcludePrefixes: []string{"db_"},
 		},
+		SupportedObjectTypes: []string{ObjectTypeProcedure, ObjectTypeFunction, ObjectTypeTrigger},
 	}
 }
 
@@ -2350,4 +2354,299 @@ func (d *SQLServerDriver) SQLIsNull(col, defaultVal string) string {
 }
 func (d *SQLServerDriver) SQLCurrentTimestamp() string { return "GETDATE()" }
 func (d *SQLServerDriver) SQLQuoteIdent(name string) string { return "[" + name + "]" }
+
+// ─── Database Object Management ─────────────────────────────────────────
+
+func (d *SQLServerDriver) SupportedObjectTypes() []string {
+	return []string{ObjectTypeProcedure, ObjectTypeFunction, ObjectTypeTrigger, ObjectTypeType}
+}
+
+func (d *SQLServerDriver) ListObjectsByType(schema, objectType string, opts ListOptions) (*ListResult, error) {
+	keyword := "%" + opts.Keyword + "%"
+	offset := (opts.Page - 1) * opts.PageSize
+
+	var countSQL, dataSQL string
+	var countArgs, dataArgs []interface{}
+
+	switch objectType {
+	case ObjectTypeProcedure:
+		countSQL = `SELECT COUNT(*) FROM sys.procedures p
+			WHERE p.schema_id=SCHEMA_ID(@p1) AND p.is_ms_shipped=0 AND (@p2='' OR p.name LIKE @p2)`
+		countArgs = []interface{}{schema, keyword}
+		dataSQL = `SELECT p.name, '', p.create_date, p.modify_date
+			FROM sys.procedures p
+			WHERE p.schema_id=SCHEMA_ID(@p1) AND p.is_ms_shipped=0 AND (@p2='' OR p.name LIKE @p2)
+			ORDER BY p.name OFFSET @p3 ROWS FETCH NEXT @p4 ROWS ONLY`
+		dataArgs = []interface{}{schema, keyword, offset, opts.PageSize}
+	case ObjectTypeFunction:
+		countSQL = `SELECT COUNT(*) FROM sys.objects o
+			WHERE o.schema_id=SCHEMA_ID(@p1) AND o.type IN ('FN','IF','TF','FS','FT')
+			AND o.is_ms_shipped=0 AND (@p2='' OR o.name LIKE @p2)`
+		countArgs = []interface{}{schema, keyword}
+		dataSQL = `SELECT o.name, o.type_desc, o.create_date, o.modify_date
+			FROM sys.objects o
+			WHERE o.schema_id=SCHEMA_ID(@p1) AND o.type IN ('FN','IF','TF','FS','FT')
+			AND o.is_ms_shipped=0 AND (@p2='' OR o.name LIKE @p2)
+			ORDER BY o.name OFFSET @p3 ROWS FETCH NEXT @p4 ROWS ONLY`
+		dataArgs = []interface{}{schema, keyword, offset, opts.PageSize}
+	case ObjectTypeTrigger:
+		countSQL = `SELECT COUNT(*) FROM sys.triggers t
+			JOIN sys.objects o ON t.parent_id=o.object_id
+			JOIN sys.schemas s ON o.schema_id=s.schema_id
+			WHERE s.name=@p1 AND t.is_ms_shipped=0 AND (@p2='' OR t.name LIKE @p2)`
+		countArgs = []interface{}{schema, keyword}
+		dataSQL = `SELECT t.name, COALESCE(t.type_desc,''), t.create_date, t.modify_date
+			FROM sys.triggers t
+			JOIN sys.objects o ON t.parent_id=o.object_id
+			JOIN sys.schemas s ON o.schema_id=s.schema_id
+			WHERE s.name=@p1 AND t.is_ms_shipped=0 AND (@p2='' OR t.name LIKE @p2)
+			ORDER BY t.name OFFSET @p3 ROWS FETCH NEXT @p4 ROWS ONLY`
+		dataArgs = []interface{}{schema, keyword, offset, opts.PageSize}
+	case ObjectTypeType:
+		countSQL = `SELECT COUNT(*) FROM sys.types t
+			JOIN sys.schemas s ON t.schema_id=s.schema_id
+			WHERE s.name=@p1 AND t.is_user_defined=1 AND (@p2='' OR t.name LIKE @p2)`
+		countArgs = []interface{}{schema, keyword}
+		dataSQL = `SELECT t.name, COALESCE(t.system_type_id,''), '', ''
+			FROM sys.types t
+			JOIN sys.schemas s ON t.schema_id=s.schema_id
+			WHERE s.name=@p1 AND t.is_user_defined=1 AND (@p2='' OR t.name LIKE @p2)
+			ORDER BY t.name OFFSET @p3 ROWS FETCH NEXT @p4 ROWS ONLY`
+		dataArgs = []interface{}{schema, keyword, offset, opts.PageSize}
+	default:
+		return nil, fmt.Errorf("unsupported object type: %s", objectType)
+	}
+
+	var total int64
+	if err := d.db.QueryRow(countSQL, countArgs...).Scan(&total); err != nil {
+		return nil, fmt.Errorf("count objects failed: %w", err)
+	}
+
+	rows, err := d.db.Query(dataSQL, dataArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("list objects failed: %w", err)
+	}
+	defer rows.Close()
+
+	var objects []DBObject
+	for rows.Next() {
+		var obj DBObject
+		if err := rows.Scan(&obj.Name, &obj.Status, &obj.CreatedAt, &obj.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan object failed: %w", err)
+		}
+		obj.Type = objectType
+		obj.Schema = schema
+		objects = append(objects, obj)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate objects failed: %w", err)
+	}
+	if objects == nil {
+		objects = []DBObject{}
+	}
+
+	return &ListResult{Objects: objects, Total: total, Page: opts.Page, PageSize: opts.PageSize}, nil
+}
+
+func (d *SQLServerDriver) GetObjectDefinition(schema, objectType, objectName string) (string, error) {
+	var definition string
+	switch objectType {
+	case ObjectTypeProcedure:
+		err := d.db.QueryRow(
+			`SELECT COALESCE(m.definition, '-- definition unavailable')
+			 FROM sys.procedures p
+			 JOIN sys.sql_modules m ON p.object_id=m.object_id
+			 WHERE p.schema_id=SCHEMA_ID(@p1) AND p.name=@p2 AND p.is_ms_shipped=0`,
+			schema, objectName,
+		).Scan(&definition)
+		if err != nil {
+			return "", fmt.Errorf("get procedure definition failed: %w", err)
+		}
+	case ObjectTypeFunction:
+		err := d.db.QueryRow(
+			`SELECT COALESCE(m.definition, '-- definition unavailable')
+			 FROM sys.objects o
+			 JOIN sys.sql_modules m ON o.object_id=m.object_id
+			 WHERE o.schema_id=SCHEMA_ID(@p1) AND o.name=@p2
+			 AND o.type IN ('FN','IF','TF','FS','FT') AND o.is_ms_shipped=0`,
+			schema, objectName,
+		).Scan(&definition)
+		if err != nil {
+			return "", fmt.Errorf("get function definition failed: %w", err)
+		}
+	case ObjectTypeTrigger:
+		err := d.db.QueryRow(
+			`SELECT COALESCE(m.definition, '-- definition unavailable')
+			 FROM sys.triggers t
+			 JOIN sys.sql_modules m ON t.object_id=m.object_id
+			 WHERE t.name=@p1 AND t.is_ms_shipped=0`,
+			objectName,
+		).Scan(&definition)
+		if err != nil {
+			return "", fmt.Errorf("get trigger definition failed: %w", err)
+		}
+	default:
+		return "", fmt.Errorf("unsupported object type: %s", objectType)
+	}
+	return definition, nil
+}
+
+func (d *SQLServerDriver) GetObjectDetail(schema, objectType, objectName string) (map[string]interface{}, error) {
+	detail := make(map[string]interface{})
+	detail["name"] = objectName
+	detail["type"] = objectType
+	detail["schema"] = schema
+
+	switch objectType {
+	case ObjectTypeProcedure:
+		var createDate, modifyDate string
+		err := d.db.QueryRow(
+			`SELECT CONVERT(varchar, p.create_date, 120), CONVERT(varchar, p.modify_date, 120)
+			 FROM sys.procedures p
+			 WHERE p.schema_id=SCHEMA_ID(@p1) AND p.name=@p2 AND p.is_ms_shipped=0`,
+			schema, objectName,
+		).Scan(&createDate, &modifyDate)
+		if err != nil {
+			return nil, err
+		}
+		detail["created_at"] = createDate
+		detail["updated_at"] = modifyDate
+	case ObjectTypeFunction:
+		var typeDesc, createDate, modifyDate string
+		err := d.db.QueryRow(
+			`SELECT COALESCE(o.type_desc,''), CONVERT(varchar, o.create_date, 120), CONVERT(varchar, o.modify_date, 120)
+			 FROM sys.objects o
+			 WHERE o.schema_id=SCHEMA_ID(@p1) AND o.name=@p2
+			 AND o.type IN ('FN','IF','TF','FS','FT') AND o.is_ms_shipped=0`,
+			schema, objectName,
+		).Scan(&typeDesc, &createDate, &modifyDate)
+		if err != nil {
+			return nil, err
+		}
+		detail["type_desc"] = typeDesc
+		detail["created_at"] = createDate
+		detail["updated_at"] = modifyDate
+	default:
+		// Return basic detail for unsupported types
+	}
+	return detail, nil
+}
+
+func (d *SQLServerDriver) CheckDependencies(schema, objectType, objectName string) ([]DependencyInfo, error) {
+	var deps []DependencyInfo
+
+	rows, err := d.db.Query(
+		`SELECT OBJECT_NAME(dep.referencing_id) AS dependent_name,
+			CASE
+				WHEN OBJECTPROPERTY(dep.referencing_id, 'IsProcedure') = 1 THEN 'procedure'
+				WHEN OBJECTPROPERTY(dep.referencing_id, 'IsFunction') = 1 THEN 'function'
+				WHEN OBJECTPROPERTY(dep.referencing_id, 'IsTrigger') = 1 THEN 'trigger'
+				ELSE 'unknown'
+			END AS dependent_type
+		 FROM sys.sql_expression_dependencies dep
+		 WHERE OBJECT_SCHEMA_NAME(dep.referenced_id) = @p1
+		   AND dep.referenced_entity_name = @p2
+		   AND OBJECT_NAME(dep.referencing_id) != @p2`,
+		schema, objectName,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("check dependencies failed: %w", err)
+	}
+	for rows.Next() {
+		var dep DependencyInfo
+		if err := rows.Scan(&dep.DependentName, &dep.DependentType); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		dep.Schema = schema
+		dep.Detail = fmt.Sprintf("references %s", objectName)
+		deps = append(deps, dep)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+
+	if deps == nil {
+		deps = []DependencyInfo{}
+	}
+	return deps, nil
+}
+
+func (d *SQLServerDriver) ExecuteObjectDDL(schema, objectType, ddl string) (string, error) {
+	_, err := d.db.Exec(ddl)
+	if err != nil {
+		return "", fmt.Errorf("SQL Server DDL execution failed: %w", err)
+	}
+	return fmt.Sprintf("%s object created/modified", objectType), nil
+}
+
+func (d *SQLServerDriver) GenerateCreateTemplate(objectType, schema, objectName string) (string, error) {
+	name := "{{.ObjectName}}"
+	if objectName != "" {
+		name = objectName
+	}
+	qualified := fmt.Sprintf("[%s].[%s]", schema, name)
+
+	switch objectType {
+	case ObjectTypeProcedure:
+		return `CREATE PROCEDURE ` + qualified + `
+    @param1 INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    -- TODO: procedure logic
+    SELECT @param1;
+END;`, nil
+	case ObjectTypeFunction:
+		return `CREATE FUNCTION ` + qualified + `
+(
+    @param1 INT
+)
+RETURNS INT
+AS
+BEGIN
+    -- TODO: function logic
+    RETURN @param1;
+END;`, nil
+	case ObjectTypeTrigger:
+		return `CREATE TRIGGER ` + qualified + `
+ON {{.TableName}}
+AFTER INSERT, UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+    -- TODO: trigger logic
+    -- Example: SET @msg = 'Rows inserted/updated';
+END;`, nil
+	case ObjectTypeType:
+		return `CREATE TYPE ` + qualified + ` AS TABLE (
+    field1 INT,
+    field2 NVARCHAR(100)
+);`, nil
+	default:
+		return "", fmt.Errorf("unsupported object type: %s", objectType)
+	}
+}
+
+func (d *SQLServerDriver) GenerateAlterDDL(schema, objectType, name, newDef string) ([]string, error) {
+	return []string{newDef}, nil
+}
+
+func (d *SQLServerDriver) GenerateDropDDL(schema, objectType, name string) (string, error) {
+	qualified := fmt.Sprintf("[%s].[%s]", schema, name)
+	switch objectType {
+	case ObjectTypeProcedure:
+		return fmt.Sprintf("DROP PROCEDURE %s", qualified), nil
+	case ObjectTypeFunction:
+		return fmt.Sprintf("DROP FUNCTION %s", qualified), nil
+	case ObjectTypeTrigger:
+		return fmt.Sprintf("DROP TRIGGER %s", qualified), nil
+	case ObjectTypeType:
+		return fmt.Sprintf("DROP TYPE %s", qualified), nil
+	default:
+		return "", fmt.Errorf("unsupported object type: %s", objectType)
+	}
+}
 

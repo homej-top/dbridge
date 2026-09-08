@@ -80,6 +80,16 @@ func RegisterRoutes(r *gin.RouterGroup, cfg *config.Config, logger *zap.Logger) 
 		ds.GET("/:id/databases/:db/schemas", dsHandler.ListDatabaseSchemas)
 		ds.POST("/upload-sqlite", dsHandler.UploadSQLiteFile)
 		ds.GET("/:id/download", dsHandler.DownloadSQLiteFile)
+
+		// Database object management routes
+		ds.GET("/:id/objects/types", dsHandler.GetSupportedObjectTypes)
+		ds.GET("/:id/objects/:schema/:type/template", dsHandler.GetCreateTemplate)
+		ds.GET("/:id/objects/:schema/:type", dsHandler.ListObjectsByType)
+		ds.GET("/:id/objects/:schema/:type/:name", dsHandler.GetObjectDetail)
+		ds.POST("/:id/objects/:schema/:type", dsHandler.CreateObject)
+		ds.PUT("/:id/objects/:schema/:type/:name", dsHandler.AlterObject)
+		ds.DELETE("/:id/objects/:schema/:type/:name", dsHandler.DropObject)
+		ds.POST("/:id/objects/:schema/matview/:name/refresh", dsHandler.RefreshMatView)
 	}
 
 	// Query routes (protected)

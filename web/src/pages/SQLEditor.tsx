@@ -43,6 +43,8 @@ import CreateTableModal from '../components/CreateTableModal';
 import CreateViewModal from '../components/CreateViewModal';
 import SchemaFormModal from '../components/SchemaFormModal';
 import SchemaTree from '../components/SchemaTree';
+import ObjectDefinitionPanel from '../components/ObjectDefinitionPanel';
+import ObjectEditorModal from '../components/ObjectEditorModal';
 import { getDialect, classifySQL } from '../utils/dialect';
 
 // --- Types ---
@@ -102,7 +104,13 @@ interface SchemaListTab extends BaseTab {
   items: any[];
 }
 
-type TabItem = TableTab | SqlTab | SchemaListTab;
+interface ObjectTab extends BaseTab {
+  type: 'object';
+  objectType: string;
+  objectName: string;
+}
+
+type TabItem = TableTab | SqlTab | SchemaListTab | ObjectTab;
 
 let tabIdCounter = 0;
 const nextTabId = () => `tab-${++tabIdCounter}`;
@@ -313,6 +321,7 @@ const SQLEditor: React.FC = () => {
   const [queryCreateTable, setQueryCreateTable] = useState<{ open: boolean; schema: string; database?: string }>({ open: false, schema: '' });
   const [queryCreateView, setQueryCreateView] = useState<{ open: boolean; schema: string; database?: string }>({ open: false, schema: '' });
   const [schemaForm, setSchemaForm] = useState<{ open: boolean; mode: 'create' | 'edit'; database?: string; initValues?: { name: string; charset: string; collation: string } }>({ open: false, mode: 'create' });
+  const [objectEditor, setObjectEditor] = useState<{ open: boolean; schema: string; objectType: string; objectName?: string; database?: string }>({ open: false, schema: '', objectType: '' });
   const [treeRefreshKey, setTreeRefreshKey] = useState(0);
 
   // Get DB type for the tree's current data source
@@ -824,6 +833,20 @@ const SQLEditor: React.FC = () => {
     }).catch(() => updateTab(id, { loading: false }));
   }, [enforceMaxTabs]);
 
+  const openObjectTab = useCallback((schema: string, objectType: string, objectName: string, database?: string, dsId?: string) => {
+    const existing = tabsRef.current.find((t) =>
+      t.type === 'object' && (t as ObjectTab).objectType === objectType && (t as ObjectTab).objectName === objectName && (t as ObjectTab).schema === schema && (t as ObjectTab).database === database
+    );
+    if (existing) { setActiveTabId(existing.id); return; }
+    const id = nextTabId();
+    const newTab: ObjectTab = {
+      id, type: 'object', title: `${objectName}`, closable: true, loading: false, lastUsedAt: Date.now(),
+      result: null, page: 1, pageSize: 20, schema, database, objectType, objectName, dsId,
+    };
+    setTabs((prev) => enforceMaxTabs([...prev, newTab], id));
+    setActiveTabId(id);
+  }, [enforceMaxTabs]);
+
   // --- Add SQL tab ---
   const addSQLTab = useCallback(() => {
     const id = nextTabId();
@@ -1091,7 +1114,8 @@ const SQLEditor: React.FC = () => {
       return obj;
     });
     const isTableTab = tab.type === 'table';
-    if (isTableTab) {
+    const isReadOnly = isTableTab && (tab as TableTab).isView;
+    if (isTableTab && !isReadOnly) {
       columns.unshift({
         title: (
           <Checkbox
@@ -1115,23 +1139,25 @@ const SQLEditor: React.FC = () => {
           <Button type="link" size="small" onClick={() => {
             setRowDetail({ open: true, data: record, columns: result.columns });
           }}>{tr('query.view')}</Button>
-          <Button type="link" size="small" onClick={async () => {
-            if (isTableTab) {
-              const t = tab as any;
-              // Use cached structure if available, otherwise fetch
-              const cacheKey = `${t.dsId }:${t.schema || ''}:${t.table || ''}`;
-              if (tableStructureCache[cacheKey]) {
-                const { columns: cols } = tableStructureCache[cacheKey];
-                const meta: Record<string, { type: string; nullable: boolean; key: string; comment: string }> = {};
-                cols.forEach((c: any) => {
-                  meta[c.name] = { type: c.type || '', nullable: c.nullable ?? true, key: c.key || '', comment: c.comment || '' };
-                });
-                setColumnMeta(prev => ({ ...prev, ...meta }));
+          {!isReadOnly && (
+            <Button type="link" size="small" onClick={async () => {
+              if (isTableTab) {
+                const t = tab as any;
+                // Use cached structure if available, otherwise fetch
+                const cacheKey = `${t.dsId }:${t.schema || ''}:${t.table || ''}`;
+                if (tableStructureCache[cacheKey]) {
+                  const { columns: cols } = tableStructureCache[cacheKey];
+                  const meta: Record<string, { type: string; nullable: boolean; key: string; comment: string }> = {};
+                  cols.forEach((c: any) => {
+                    meta[c.name] = { type: c.type || '', nullable: c.nullable ?? true, key: c.key || '', comment: c.comment || '' };
+                  });
+                  setColumnMeta(prev => ({ ...prev, ...meta }));
+                }
               }
-            }
-            setRowEdit({ open: true, data: record, columns: result.columns, tab }); editForm.setFieldsValue(record);
-          }}>{tr('query.edit')}</Button>
-          {isTableTab && (
+              setRowEdit({ open: true, data: record, columns: result.columns, tab }); editForm.setFieldsValue(record);
+            }}>{tr('query.edit')}</Button>
+          )}
+          {isTableTab && !isReadOnly && (
             <Popconfirm title={tr('query.confirmDelete')} onConfirm={async () => {
               const t = tab as any;
               const ds = t.dsId || treeDSRef.current;
@@ -1314,11 +1340,12 @@ const SQLEditor: React.FC = () => {
   const renderTabContent = (tab: TabItem) => {
     if (tab.type === 'table') {
       const t = tab as TableTab;
+      const isReadOnlyView = t.isView;
       return (
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
           <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            {tab.result && (
+            {tab.result && !isReadOnlyView && (
               <>
                 <Button size="small" icon={<PlusOutlined />}
                   onClick={() => openAddRowModal(tab)}>
@@ -1442,6 +1469,19 @@ const SQLEditor: React.FC = () => {
             />
           </Spin>
         </div>
+      );
+    }
+    if (tab.type === 'object') {
+      const o = tab as ObjectTab;
+      return (
+        <ObjectDefinitionPanel
+          dataSourceId={o.dsId || treeDSRef.current}
+          schema={o.schema || ''}
+          objectType={o.objectType}
+          objectName={o.objectName}
+          database={o.database}
+          onEdit={() => setObjectEditor({ open: true, schema: o.schema || '', objectType: o.objectType, objectName: o.objectName, database: o.database })}
+        />
       );
     }
     // SQL tab
@@ -1604,7 +1644,11 @@ const SQLEditor: React.FC = () => {
               onSelect={(_key, ctx) => {
                 if (ctx.database) setTreeDatabase(ctx.database);
                 if (ctx.schema) setTreeSchema(ctx.schema);
-                if (ctx.table) {
+                if (ctx.objectType) {
+                  // Object node clicked — open object definition tab
+                  const objectName = _key.split('-').slice(ctx.database ? 3 : 2).join('-');
+                  openObjectTab(ctx.schema || '', ctx.objectType, objectName, ctx.database, treeDSRef.current);
+                } else if (ctx.table) {
                   openTableTab(ctx.schema || '', ctx.table, ctx.isView || false, ctx.database, treeDSRef.current);
                 } else if (ctx.schema) {
                   // PG/MSSQL: schema node → open table list
@@ -1646,6 +1690,72 @@ const SQLEditor: React.FC = () => {
                   setSchemaForm({ open: true, mode: 'create', database });
                 } else if (action === 'edit-schema') {
                   setSchemaForm({ open: true, mode: 'edit', database, initValues: { name: schema, charset: '', collation: '' } });
+                }
+              }}
+              onObjectAction={(action, schema, objectType, objectName, database) => {
+                if (action === 'view-definition' || action === 'edit') {
+                  setObjectEditor({ open: true, schema, objectType, objectName, database });
+                } else if (action === 'copy-ddl') {
+                  dsAPI.getObjectDetail(treeDSRef.current, schema, objectType, objectName, database).then((res) => {
+                    const detail = res.data?.data || res.data;
+                    const def = detail?.definition || detail?.ddl || '';
+                    if (def) {
+                      navigator.clipboard.writeText(def);
+                      message.success(tr('query.copied'));
+                    }
+                  });
+                } else if (action === 'delete') {
+                  Modal.confirm({
+                    title: tr('objects.drop'),
+                    content: tr('objects.dropConfirm', { type: tr(`objects.${objectType}s`) || objectType, name: objectName }),
+                    okType: 'danger',
+                    onOk: async () => {
+                      try {
+                        await dsAPI.dropObject(treeDSRef.current, schema, objectType, objectName, { database });
+                        message.success(tr('objects.dropSuccess'));
+                        setTreeRefreshKey((k) => k + 1);
+                      } catch { /* handled by interceptor */ }
+                    },
+                  });
+                } else if (action === 'refresh' || action === 'refresh-concurrently' || action === 'refresh-with-no-data') {
+                  // Materialized view refresh actions
+                  const modeMap: Record<string, 'normal' | 'concurrently' | 'with-no-data'> = {
+                    'refresh': 'normal',
+                    'refresh-concurrently': 'concurrently',
+                    'refresh-with-no-data': 'with-no-data',
+                  };
+                  const mode = modeMap[action];
+                  let confirmContent = '';
+                  if (mode === 'normal') {
+                    confirmContent = tr('objects.refreshMatView') + ` "${objectName}"?`;
+                  } else if (mode === 'concurrently') {
+                    confirmContent = tr('objects.refreshMatViewConcurrently') + ` "${objectName}"?`;
+                  } else {
+                    confirmContent = tr('objects.refreshMatViewNoData') + ` "${objectName}"?`;
+                  }
+                  Modal.confirm({
+                    title: tr('objects.refreshMatView'),
+                    content: confirmContent,
+                    onOk: async () => {
+                      try {
+                        await dsAPI.refreshMatView(treeDSRef.current, schema, objectName, { mode, database });
+                        message.success(tr('objects.refreshSuccess'));
+                      } catch { /* handled by interceptor */ }
+                    },
+                  });
+                }
+              }}
+              onObjectFolderAction={(action, schema, objectType, database) => {
+                if (action === 'create-object') {
+                  // For tables and views, use the specific create dialogs
+                  if (objectType === 'table') {
+                    setQueryCreateTable({ open: true, schema, database });
+                  } else if (objectType === 'view') {
+                    setQueryCreateView({ open: true, schema, database });
+                  } else {
+                    // For other object types (procedure, function, trigger, event, etc.)
+                    setObjectEditor({ open: true, schema, objectType, database });
+                  }
                 }
               }}
             />
@@ -1694,7 +1804,7 @@ const SQLEditor: React.FC = () => {
                 label: (
                   <Tooltip title={tooltipText}>
                   <span>
-                    {tab.type === 'table' ? <TableOutlined style={{ marginRight: 4 }} /> : tab.type === 'schema_list' ? <FolderOutlined style={{ marginRight: 4 }} /> : <CodeOutlined style={{ marginRight: 4 }} />}
+                    {tab.type === 'table' ? <TableOutlined style={{ marginRight: 4 }} /> : tab.type === 'schema_list' ? <FolderOutlined style={{ marginRight: 4 }} /> : tab.type === 'object' ? <CodeOutlined style={{ marginRight: 4, color: '#722ed1' }} /> : <CodeOutlined style={{ marginRight: 4 }} />}
                     {tab.title}
                     {tab.loading && <Spin size="small" style={{ marginLeft: 4 }} />}
                   </span>
@@ -1820,6 +1930,17 @@ const SQLEditor: React.FC = () => {
         initValues={schemaForm.initValues}
         onClose={() => setSchemaForm({ open: false, mode: 'create' })}
         onSuccess={() => { setSchemaForm({ open: false, mode: 'create' }); setTreeRefreshKey(k => k + 1); }}
+      />
+
+      <ObjectEditorModal
+        open={objectEditor.open}
+        dataSourceId={treeDSRef.current}
+        schema={objectEditor.schema}
+        objectType={objectEditor.objectType}
+        objectName={objectEditor.objectName}
+        database={objectEditor.database}
+        onClose={() => setObjectEditor({ open: false, schema: '', objectType: '' })}
+        onSuccess={() => { setTreeRefreshKey(k => k + 1); }}
       />
 
       {/* Delete Table/View Confirmation Modal */}

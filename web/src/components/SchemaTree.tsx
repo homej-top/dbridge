@@ -17,6 +17,13 @@ import {
   DeleteOutlined,
   EditOutlined,
   CodeOutlined,
+  FunctionOutlined,
+  ThunderboltOutlined,
+  CalendarOutlined,
+  NumberOutlined,
+  BlockOutlined,
+  SwapOutlined,
+  AppstoreOutlined,
 } from '@ant-design/icons';
 import type { DataNode } from 'antd/es/tree';
 import { dsAPI } from '../api';
@@ -42,6 +49,7 @@ export interface TreeMetadata {
   levels: TreeLevelInfo[];
   allow_create: Record<string, boolean>;
   system_filter?: SystemFilter;
+  supported_object_types?: string[];
 }
 
 // ─── Icon resolver ──────────────────────────────────────────────────────────
@@ -53,14 +61,43 @@ const ICON_MAP: Record<string, React.ReactNode> = {
   ClusterOutlined: <ClusterOutlined />,
   TableOutlined: <TableOutlined />,
   EyeOutlined: <EyeOutlined />,
+  CodeOutlined: <CodeOutlined />,
+  FunctionOutlined: <FunctionOutlined />,
+  ThunderboltOutlined: <ThunderboltOutlined />,
+  CalendarOutlined: <CalendarOutlined />,
+  NumberOutlined: <NumberOutlined />,
+  BlockOutlined: <BlockOutlined />,
+  SwapOutlined: <SwapOutlined />,
+  AppstoreOutlined: <AppstoreOutlined />,
 };
 
 function resolveIcon(iconName?: string): React.ReactNode {
   return iconName ? ICON_MAP[iconName] ?? <DatabaseOutlined /> : <DatabaseOutlined />;
 }
 
+const OBJECT_FOLDER_INFO: Record<string, { icon: React.ReactNode; labelKey: string }> = {
+  procedure: { icon: <CodeOutlined />, labelKey: 'tree.procedures' },
+  function: { icon: <FunctionOutlined />, labelKey: 'tree.functions' },
+  trigger: { icon: <ThunderboltOutlined />, labelKey: 'tree.triggers' },
+  event: { icon: <CalendarOutlined />, labelKey: 'tree.events' },
+  sequence: { icon: <NumberOutlined />, labelKey: 'tree.sequences' },
+  type: { icon: <BlockOutlined />, labelKey: 'tree.types' },
+  synonym: { icon: <SwapOutlined />, labelKey: 'tree.synonyms' },
+  package: { icon: <AppstoreOutlined />, labelKey: 'tree.packages' },
+  matview: { icon: <TableOutlined />, labelKey: 'tree.matviews' },
+};
+
+function isObjectFolderKey(nodeType: string): boolean {
+  return nodeType.endsWith('_folder') && nodeType !== 'tables_folder' && nodeType !== 'views_folder';
+}
+
+function objectTypeFromFolderKey(nodeType: string): string {
+  return nodeType.replace(/_folder$/, '');
+}
+
 // Ref to access onSchemaAction from the static renderSchemaTitle helper
 const schemaActionRef: React.MutableRefObject<((action: string, schema: string, database?: string) => void) | null> = { current: null };
+const objectFolderActionRef: React.MutableRefObject<((action: string, schema: string, objectType: string, database?: string) => void) | null> = { current: null };
 const trRef: React.MutableRefObject<((key: string) => string) | null> = { current: null };
 const dbTypeRef: React.MutableRefObject<string> = { current: 'mysql' };
 
@@ -83,27 +120,19 @@ function renderSchemaTitle(name: string, nodeType: 'database' | 'schema' | 'user
       menuItems.push({ key: 'edit-schema', label: tr('common.edit'), icon: <EditOutlined /> });
       menuItems.push({ key: 'delete-schema', label: tr('common.delete'), danger: true, icon: <DeleteOutlined /> });
     } else if (dt === 'mysql') {
-      // MySQL: database = schema → Create Table, Create View, Edit, Delete
-      menuItems.push({ key: 'create-table', label: tr('query.createTable'), icon: <TableOutlined /> });
-      menuItems.push({ key: 'create-view', label: tr('query.createView'), icon: <EyeOutlined /> });
-      menuItems.push({ type: 'divider' as const });
+      // MySQL: database = schema → Edit, Delete only (no create table/view here)
       menuItems.push({ key: 'edit-schema', label: tr('common.edit'), icon: <EditOutlined /> });
       menuItems.push({ key: 'delete-schema', label: tr('common.delete'), danger: true, icon: <DeleteOutlined /> });
     }
   } else if (nodeType === 'schema') {
-    // PG/SQL Server: schema node → Create Table, Create View, (PG: Edit Schema), Delete Schema
-    menuItems.push({ key: 'create-table', label: tr('query.createTable'), icon: <TableOutlined /> });
-    menuItems.push({ key: 'create-view', label: tr('query.createView'), icon: <EyeOutlined /> });
+    // PG/SQL Server: schema node → Edit, Delete Schema (no create table/view here)
     menuItems.push({ type: 'divider' as const });
     if (dt === 'postgres' || dt === 'sqlserver') {
       menuItems.push({ key: 'edit-schema', label: tr('common.edit'), icon: <EditOutlined /> });
     }
     menuItems.push({ key: 'delete-schema', label: tr('common.delete'), danger: true, icon: <DeleteOutlined /> });
   } else if (nodeType === 'user') {
-    // Oracle: user node → Create Table, Create View, Edit, Delete
-    menuItems.push({ key: 'create-table', label: tr('query.createTable'), icon: <TableOutlined /> });
-    menuItems.push({ key: 'create-view', label: tr('query.createView'), icon: <EyeOutlined /> });
-    menuItems.push({ type: 'divider' as const });
+    // Oracle: user node → Edit, Delete
     menuItems.push({ key: 'edit-schema', label: tr('common.edit'), icon: <EditOutlined /> });
     menuItems.push({ key: 'delete-schema', label: tr('common.delete'), danger: true, icon: <DeleteOutlined /> });
   }
@@ -135,12 +164,32 @@ function renderSchemaTitle(name: string, nodeType: 'database' | 'schema' | 'user
   );
 }
 
+// Render an object folder title (e.g. "存储过程", "函数") with a "+" create button.
+// label should already be translated before passing to this function.
+function renderObjectFolderTitle(label: string, objectType: string, schema: string, database?: string): React.ReactNode {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+      <Button
+        type="text"
+        size="small"
+        icon={<PlusOutlined style={{ fontSize: 12 }} />}
+        onClick={(e) => {
+          e.stopPropagation();
+          objectFolderActionRef.current?.('create-object', schema, objectType, database);
+        }}
+        style={{ flexShrink: 0, opacity: 0.5 }}
+      />
+    </div>
+  );
+}
+
 // ─── Props ──────────────────────────────────────────────────────────────────
 
 interface SchemaTreeProps {
   dataSourceId: string;
   selectedKey?: string;
-  onSelect?: (key: string, context: { database?: string; schema?: string; user?: string; table?: string; isView?: boolean }) => void;
+  onSelect?: (key: string, context: { database?: string; schema?: string; user?: string; table?: string; isView?: boolean; objectType?: string }) => void;
   onCreate?: (levelKey: string, parentName?: string) => void;
   refreshTrigger?: number;
   /** Show tables/views under schema nodes. When false, tree stops at schema level. Default: true */
@@ -149,6 +198,10 @@ interface SchemaTreeProps {
   onTableAction?: (action: string, schema: string, table: string, isView: boolean, database?: string) => void;
   /** Callback when a schema/database/user action is triggered from the three-dot menu */
   onSchemaAction?: (action: string, schema: string, database?: string) => void;
+  /** Callback when an object action is triggered from the three-dot menu */
+  onObjectAction?: (action: string, schema: string, objectType: string, objectName: string, database?: string) => void;
+  /** Callback when an object folder action is triggered (e.g. create new object) */
+  onObjectFolderAction?: (action: string, schema: string, objectType: string, database?: string) => void;
 }
 
 // ─── Component ──────────────────────────────────────────────────────────────
@@ -162,6 +215,8 @@ const SchemaTree: React.FC<SchemaTreeProps> = ({
   showTables = true,
   onTableAction,
   onSchemaAction,
+  onObjectAction,
+  onObjectFolderAction,
 }) => {
   const { t: tr } = useTranslation();
   const [meta, setMeta] = useState<TreeMetadata | null>(null);
@@ -170,9 +225,11 @@ const SchemaTree: React.FC<SchemaTreeProps> = ({
   const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([]);
   const [searchText, setSearchText] = useState('');
   const loadedRef = React.useRef<Set<string>>(new Set());
+  const loadingRef = React.useRef<Set<string>>(new Set()); // Track nodes currently being loaded
 
   // Sync the schemaActionRef so renderSchemaTitle can access onSchemaAction
   schemaActionRef.current = onSchemaAction || null;
+  objectFolderActionRef.current = onObjectFolderAction || null;
   trRef.current = tr;
   dbTypeRef.current = meta?.db_type || 'mysql';
 
@@ -180,7 +237,7 @@ const SchemaTree: React.FC<SchemaTreeProps> = ({
   const secondLevel = useMemo(() => {
     if (!meta?.levels) return null;
     for (const l of meta.levels) {
-      if (l.key !== 'server' && l.key !== 'tables_folder' && l.key !== 'views_folder' && l.key !== 'table' && l.key !== 'view') {
+      if (l.key !== 'server' && !l.key.endsWith('_folder') && l.key !== 'table' && l.key !== 'view') {
         return l;
       }
     }
@@ -234,7 +291,7 @@ const SchemaTree: React.FC<SchemaTreeProps> = ({
         let lvl = { key: 'database', label: 'Database', icon: 'DatabaseOutlined' };
         if (m.levels) {
           for (const l of m.levels) {
-            if (l.key !== 'server' && l.key !== 'tables_folder' && l.key !== 'views_folder' && l.key !== 'table' && l.key !== 'view') {
+            if (l.key !== 'server' && !l.key.endsWith('_folder') && l.key !== 'table' && l.key !== 'view') {
               lvl = { key: l.key, label: l.label || '', icon: l.icon || '' };
               break;
             }
@@ -256,6 +313,9 @@ const SchemaTree: React.FC<SchemaTreeProps> = ({
     }
   }, [dataSourceId, secondLevel, showTables, onSchemaAction]);
 
+  // Track previous dataSourceId to detect data source changes
+  const prevDataSourceIdRef = React.useRef<string>('');
+
   // Initial load
   useEffect(() => {
     if (!dataSourceId) {
@@ -263,14 +323,33 @@ const SchemaTree: React.FC<SchemaTreeProps> = ({
       setTreeDataRaw([]);
       return;
     }
+    
+    const isDataSourceChanged = prevDataSourceIdRef.current !== dataSourceId;
+    prevDataSourceIdRef.current = dataSourceId;
+    
     let cancelled = false;
-    setTreeDataRaw([]); // Clear old data while loading new
+    // Save current expanded keys before refresh
+    const savedExpandedKeys = expandedKeys;
+    
+    // Only clear tree data when data source changes, not on refresh
+    if (isDataSourceChanged) {
+      setTreeDataRaw([]);
+    }
+    
     (async () => {
       const m = await loadMeta();
       if (cancelled || !m) return;
-      await loadRootNodes(m);
-      loadedRef.current.clear();
-      setExpandedKeys([]);
+      
+      // Only reload root nodes and clear cache when data source changes
+      if (isDataSourceChanged) {
+        await loadRootNodes(m);
+        loadedRef.current.clear();
+      }
+      
+      // Restore expanded keys after refresh
+      if (!cancelled && savedExpandedKeys.length > 0) {
+        setExpandedKeys(savedExpandedKeys);
+      }
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -285,7 +364,24 @@ const SchemaTree: React.FC<SchemaTreeProps> = ({
       const nodeType = parts[0];
       const nodeName = parts.slice(1).join('-');
 
-      // Ant Design Tree caches children automatically — always load when expand fires
+      // Prevent duplicate loading of the same node
+      if (loadingRef.current.has(key)) {
+        return;
+      }
+
+      // Only reload object type folders (procedure, function, trigger, etc.) on expand
+      // to get latest data (e.g., newly created objects). Keep tables_folder/views_folder cached.
+      if (isObjectFolderKey(nodeType)) {
+        loadedRef.current.delete(key);
+      }
+
+      // If already loaded and not an object folder, skip reloading
+      if (loadedRef.current.has(key) && !isObjectFolderKey(nodeType)) {
+        return;
+      }
+
+      // Mark as loading
+      loadingRef.current.add(key);
 
       try {
         if (nodeType === 'database') {
@@ -321,30 +417,52 @@ const SchemaTree: React.FC<SchemaTreeProps> = ({
               schemaName = keyParts.slice(2).join('-');
             }
           }
-          const res = await dsAPI.tableList(dataSourceId, schemaName, dbParam);
-          const items: any[] = Array.isArray(res.data) ? res.data : res.data?.data || res.data?.list || [];
-          const tables = items.filter((i: any) => i.type === 'table');
-          const views = items.filter((i: any) => i.type === 'view');
-
           const children: DataNode[] = [];
           // For PG/MSSQL, include the database name in folder keys so we can
           // pass it to tableList when expanding tables_folder/views_folder
           const folderSuffix = dbParam ? `${dbParam}-${schemaName}` : schemaName;
-          if (tables.length > 0) {
-            children.push({
-              title: `Tables (${tables.length})`,
-              key: `tables_folder-${folderSuffix}`,
-              icon: <TableOutlined />,
-              isLeaf: false,
-            });
-          }
-          if (views.length > 0) {
-            children.push({
-              title: `Views (${views.length})`,
-              key: `views_folder-${folderSuffix}`,
-              icon: <EyeOutlined />,
-              isLeaf: false,
-            });
+          
+          // Always add Tables and Views folders (even if empty) with "+" button
+          children.push({
+            title: onTableAction
+              ? renderObjectFolderTitle(tr('query.tables'), 'table', schemaName, dbParam)
+              : tr('query.tables'),
+            key: `tables_folder-${folderSuffix}`,
+            icon: <TableOutlined />,
+            isLeaf: false,
+          });
+          children.push({
+            title: onTableAction
+              ? renderObjectFolderTitle(tr('query.views'), 'view', schemaName, dbParam)
+              : tr('query.views'),
+            key: `views_folder-${folderSuffix}`,
+            icon: <EyeOutlined />,
+            isLeaf: false,
+          });
+          
+          // Add object type folders based on supported types
+          if (showTables && meta?.supported_object_types) {
+            for (const objType of meta.supported_object_types) {
+              const info = OBJECT_FOLDER_INFO[objType];
+              if (!info) continue;
+              const objFolderKey = `${objType}_folder-${folderSuffix}`;
+              const objFolderParts = objFolderKey.split('-');
+              let ofSchema = folderSuffix;
+              let ofDb: string | undefined;
+              if (dbParam) {
+                ofDb = dbParam;
+                ofSchema = schemaName;
+              }
+              void objFolderParts;
+              children.push({
+                title: onObjectFolderAction
+                  ? renderObjectFolderTitle(tr(info.labelKey), objType, ofSchema, ofDb)
+                  : tr(info.labelKey),
+                key: objFolderKey,
+                icon: info.icon,
+                isLeaf: false,
+              });
+            }
           }
           setTreeDataRaw((prev) =>
             updateTreeNodeChildren(prev, key, children.length > 0 ? children : [])
@@ -414,14 +532,93 @@ const SchemaTree: React.FC<SchemaTreeProps> = ({
           });
 
           setTreeDataRaw((prev) => updateTreeNodeChildren(prev, key, children));
+        } else if (isObjectFolderKey(nodeType)) {
+          const objectType = objectTypeFromFolderKey(nodeType);
+          // Extract database and schema from folder key
+          let folderDbParam: string | undefined;
+          let folderSchemaName = nodeName;
+          if (meta?.db_type === 'postgres' || meta?.db_type === 'sqlserver') {
+            const folderParts = key.split('-');
+            if (folderParts.length >= 3) {
+              folderDbParam = folderParts[1];
+              folderSchemaName = folderParts.slice(2).join('-');
+            }
+          }
+          const res = await dsAPI.listObjectsByType(dataSourceId, folderSchemaName, objectType, {
+            database: folderDbParam,
+          });
+          const result: any = res.data?.data || res.data;
+          const objects: any[] = result?.list || [];
+
+          const children: DataNode[] = objects.map((obj: any) => {
+            // Use the actual schema returned by backend for functions/procedures
+            // For other object types, use the folder's schema
+            const actualSchema = obj.schema || folderSchemaName;
+            const itemKey = folderDbParam
+              ? `${objectType}-${folderDbParam}-${actualSchema}-${obj.name}`
+              : `${objectType}-${actualSchema}-${obj.name}`;
+            const info = OBJECT_FOLDER_INFO[objectType];
+            // Build menu items based on object type
+            const menuItems: any[] = [
+              { key: 'copy-ddl', label: tr('query.copyObjectDdl'), icon: <CopyOutlined /> },
+            ];
+            // Add refresh options for materialized views
+            if (objectType === 'matview') {
+              menuItems.push(
+                { type: 'divider' as const },
+                { key: 'refresh', label: tr('objects.refreshMatView'), icon: <ReloadOutlined /> },
+                { key: 'refresh-concurrently', label: tr('objects.refreshMatViewConcurrently'), icon: <ReloadOutlined /> },
+                { key: 'refresh-with-no-data', label: tr('objects.refreshMatViewNoData'), icon: <ReloadOutlined /> },
+              );
+            }
+            menuItems.push(
+              { type: 'divider' as const },
+              { key: 'delete', label: tr('common.delete'), danger: true, icon: <DeleteOutlined /> },
+            );
+            return {
+              title: onObjectAction ? (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{obj.name}</span>
+                  <Dropdown
+                    menu={{
+                      items: menuItems,
+                      onClick: ({ key: actionKey }: { key: string }) => {
+                        onObjectAction(actionKey, folderSchemaName, objectType, obj.name, folderDbParam);
+                      },
+                    }}
+                    trigger={['click']}
+                    placement="bottomRight"
+                  >
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<MoreOutlined style={{ fontSize: 14 }} />}
+                      onClick={(e) => e.stopPropagation()}
+                      style={{ flexShrink: 0, opacity: 0.5 }}
+                    />
+                  </Dropdown>
+                </div>
+              ) : (
+                obj.name
+              ),
+              key: itemKey,
+              icon: info?.icon || <CodeOutlined />,
+              isLeaf: true,
+            };
+          });
+
+          setTreeDataRaw((prev) => updateTreeNodeChildren(prev, key, children));
         }
 
         loadedRef.current.add(key);
       } catch {
         // Ignore load errors
+      } finally {
+        // Always clear loading state
+        loadingRef.current.delete(key);
       }
     },
-    [dataSourceId, onTableAction, tr, meta, showTables]
+    [dataSourceId, onTableAction, onObjectAction, tr, meta, showTables]
   );
 
   function updateTreeNodeChildren(nodes: DataNode[], targetKey: string, children: DataNode[]): DataNode[] {
@@ -439,14 +636,17 @@ const SchemaTree: React.FC<SchemaTreeProps> = ({
       const parts = key.split('-');
       const nodeType = parts[0];
 
+      // Known object types from the object management feature
+      const objectTypes = new Set(['procedure', 'function', 'trigger', 'event', 'sequence', 'type', 'synonym', 'package']);
+
       // For non-leaf nodes: toggle expand on click
-      if (nodeType !== 'table' && nodeType !== 'view') {
+      if (nodeType !== 'table' && nodeType !== 'view' && nodeType !== 'matview' && !objectTypes.has(nodeType)) {
         setExpandedKeys(prev =>
           prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
         );
       }
 
-      if (nodeType === 'table' || nodeType === 'view') {
+      if (nodeType === 'table' || nodeType === 'view' || nodeType === 'matview') {
         // Key formats:
         //   MySQL/Oracle:  table-schemaName-tableName (3 parts)
         //   PG/MSSQL:      table-database-schemaName-tableName (4+ parts)
@@ -454,11 +654,28 @@ const SchemaTree: React.FC<SchemaTreeProps> = ({
           const database = parts[1];
           const schemaName = parts[2];
           const tableName = parts.slice(3).join('-');
-          onSelect?.(key, { schema: schemaName, table: tableName, isView: nodeType === 'view', database });
+          onSelect?.(key, { schema: schemaName, table: tableName, isView: nodeType === 'view' || nodeType === 'matview', database });
         } else {
           const schemaName = parts[1];
           const tableName = parts.slice(2).join('-');
-          onSelect?.(key, { schema: schemaName, table: tableName, isView: nodeType === 'view' });
+          onSelect?.(key, { schema: schemaName, table: tableName, isView: nodeType === 'view' || nodeType === 'matview' });
+        }
+        return;
+      }
+
+      // Handle object node selection
+      if (objectTypes.has(nodeType)) {
+        if (parts.length >= 4) {
+          const database = parts[1];
+          const schemaName = parts[2];
+          const _objectName = parts.slice(3).join('-');
+          void _objectName;
+          onSelect?.(key, { schema: schemaName, database, objectType: nodeType });
+        } else {
+          const schemaName = parts[1];
+          const _objectName = parts.slice(2).join('-');
+          void _objectName;
+          onSelect?.(key, { schema: schemaName, objectType: nodeType });
         }
         return;
       }
