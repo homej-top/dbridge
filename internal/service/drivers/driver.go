@@ -569,6 +569,13 @@ func ScanQueryResult(rows *sql.Rows) ([]string, [][]interface{}, error) {
 		return nil, nil, err
 	}
 
+	// Replace empty column names with default names (e.g., for computed columns in stored procedures)
+	for i, name := range colNames {
+		if strings.TrimSpace(name) == "" {
+			colNames[i] = fmt.Sprintf("Column%d", i+1)
+		}
+	}
+
 	var resultRows [][]interface{}
 	for rows.Next() {
 		values := make([]interface{}, len(colNames))
@@ -1050,6 +1057,139 @@ func IsSelectStatement(sql string) bool {
 		strings.HasPrefix(lower, "with ")
 }
 
+// MayReturnResultSet checks if a SQL statement may return a result set.
+// This is a conservative check - when in doubt, assume it might return results.
+func MayReturnResultSet(sql string) bool {
+	lower := strings.ToLower(strings.TrimSpace(sql))
+
+	// Standard SELECT-like statements
+	if strings.HasPrefix(lower, "select") ||
+		strings.HasPrefix(lower, "show ") ||
+		strings.HasPrefix(lower, "describe ") ||
+		strings.HasPrefix(lower, "desc ") ||
+		strings.HasPrefix(lower, "explain ") ||
+		strings.HasPrefix(lower, "with ") {
+		return true
+	}
+
+	// Stored procedure/function execution (cross-database)
+	if strings.HasPrefix(lower, "exec ") ||
+		strings.HasPrefix(lower, "execute ") ||
+		strings.HasPrefix(lower, "call ") {
+		return true
+	}
+
+	// PostgreSQL DO blocks (anonymous code blocks)
+	if strings.HasPrefix(lower, "do ") {
+		return true // DO blocks don't return results, but conservative check allows fallback
+	}
+
+	// PostgreSQL/Oracle BEGIN...END blocks (NOT transaction control)
+	if strings.HasPrefix(lower, "begin ") {
+		// Exclude standard SQL transaction control statements
+		if strings.HasPrefix(lower, "begin transaction") ||
+			strings.HasPrefix(lower, "begin work") ||
+			strings.HasPrefix(lower, "begin;") {
+			return false
+		}
+		// Other BEGIN blocks (PL/SQL, PL/pgSQL) may contain queries
+		return true
+	}
+
+	// RETURNING clause (PostgreSQL/Oracle)
+	if strings.Contains(lower, "returning ") {
+		return true
+	}
+
+	return false
+}
+
+// executeViaExec handles the Exec path for statements that don't return result sets.
+// This function is shared across all drivers to ensure consistent behavior.
+func executeViaExec(db *sql.DB, sqlStr string, start time.Time, needQuotedIdentifier bool) (*QueryResult, error) {
+	batchSQL := sqlStr
+	if needQuotedIdentifier {
+		upper := strings.ToUpper(strings.TrimSpace(sqlStr))
+		if !strings.HasPrefix(upper, "CREATE SCHEMA") &&
+			!strings.HasPrefix(upper, "CREATE VIEW") &&
+			!strings.HasPrefix(upper, "CREATE OR ALTER VIEW") {
+			batchSQL = "SET QUOTED_IDENTIFIER ON; " + sqlStr
+		}
+	}
+
+	res, err := db.Exec(batchSQL)
+	if err != nil {
+		return nil, fmt.Errorf("exec error: %w", err)
+	}
+	affected, _ := res.RowsAffected()
+	msg := fmt.Sprintf("Query OK, %d rows affected", affected)
+	return &QueryResult{
+		Columns:      []string{"result"},
+		Rows:         [][]interface{}{{msg}},
+		TotalRows:    1,
+		Duration:     time.Since(start).Milliseconds(),
+		IsSelect:     false,
+		AffectedRows: affected,
+	}, nil
+}
+
+// executeWithFallback tries db.Query first for statements that may return results,
+// falls back to db.Exec on failure or empty result.
+func executeWithFallback(db *sql.DB, sqlStr string, start time.Time, needQuotedIdentifier bool) (*QueryResult, error) {
+	// Try Query path first
+	rows, err := db.Query(sqlStr)
+	if err != nil {
+		// Query failed - fall back to Exec
+		return executeViaExec(db, sqlStr, start, needQuotedIdentifier)
+	}
+	defer rows.Close()
+
+	colNames, resultRows, err := ScanQueryResult(rows)
+	if err != nil {
+		// Scan failed - fall back to Exec (defer will close rows)
+		return executeViaExec(db, sqlStr, start, needQuotedIdentifier)
+	}
+
+	// Check if we got real results (not the fake "result" column)
+	if len(colNames) > 0 && len(resultRows) > 0 {
+		// Avoid false positive: single column named "result" with single row containing "Query OK"
+		isFakeResult := len(colNames) == 1 && colNames[0] == "result" && len(resultRows) == 1
+		if !isFakeResult {
+			return &QueryResult{
+				Columns:   colNames,
+				Rows:      resultRows,
+				TotalRows: int64(len(resultRows)),
+				Duration:  time.Since(start).Milliseconds(),
+				IsSelect:  true,
+			}, nil
+		}
+	}
+
+	// For SELECT-like statements with 0 rows, return empty result set (not Exec fallback)
+	// This ensures empty tables show headers instead of "Query OK, 0 rows affected"
+	lower := strings.ToLower(strings.TrimSpace(sqlStr))
+	isSelectLike := strings.HasPrefix(lower, "select") ||
+		strings.HasPrefix(lower, "show ") ||
+		strings.HasPrefix(lower, "describe ") ||
+		strings.HasPrefix(lower, "desc ") ||
+		strings.HasPrefix(lower, "explain ") ||
+		strings.HasPrefix(lower, "with ")
+
+	if isSelectLike && len(colNames) > 0 {
+		// SELECT returned 0 rows but has column headers - return empty result set
+		return &QueryResult{
+			Columns:   colNames,
+			Rows:      resultRows, // empty array
+			TotalRows: 0,
+			Duration:  time.Since(start).Milliseconds(),
+			IsSelect:  true,
+		}, nil
+	}
+
+	// Empty result or fake result - fall back to Exec (defer will close rows)
+	return executeViaExec(db, sqlStr, start, needQuotedIdentifier)
+}
+
 // ExecuteWithTiming wraps a DB operation and tracks execution duration
 func ExecuteWithTiming(fn func() error) (time.Duration, error) {
 	start := time.Now()
@@ -1083,6 +1223,14 @@ func queryToList(db *sql.DB, sql string) ([]map[string]interface{}, error) {
 	}
 	defer rows.Close()
 	cols, _ := rows.Columns()
+	
+	// Replace empty column names with default names
+	for i, name := range cols {
+		if strings.TrimSpace(name) == "" {
+			cols[i] = fmt.Sprintf("column%d", i+1)
+		}
+	}
+	
 	var result []map[string]interface{}
 	for rows.Next() {
 		vals := make([]interface{}, len(cols))

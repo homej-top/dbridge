@@ -345,42 +345,12 @@ func (d *PostgresDriver) ExecuteQuery(sql string, schema string) (*QueryResult, 
 	}
 
 	start := time.Now()
-	isSelect := IsSelectStatement(sql)
-
-	if isSelect {
-		rows, err := d.db.Query(sql)
-		if err != nil {
-			return nil, fmt.Errorf("query error: %w", err)
-		}
-		defer rows.Close()
-
-		colNames, resultRows, err := ScanQueryResult(rows)
-		if err != nil {
-			return nil, err
-		}
-		return &QueryResult{
-			Columns:   colNames,
-			Rows:      resultRows,
-			TotalRows: int64(len(resultRows)),
-			Duration:  time.Since(start).Milliseconds(),
-			IsSelect:  true,
-		}, nil
+	if MayReturnResultSet(sql) {
+		return executeWithFallback(d.db, sql, start, false)
 	}
 
-	res, err := d.db.Exec(sql)
-	if err != nil {
-		return nil, fmt.Errorf("exec error: %w", err)
-	}
-	affected, _ := res.RowsAffected()
-	msg := fmt.Sprintf("Query OK, %d rows affected", affected)
-	return &QueryResult{
-		Columns:      []string{"result"},
-		Rows:         [][]interface{}{{msg}},
-		TotalRows:    1,
-		Duration:     time.Since(start).Milliseconds(),
-		IsSelect:     false,
-		AffectedRows: affected,
-	}, nil
+	// Direct exec for definite DDL/DML
+	return executeViaExec(d.db, sql, start, false)
 }
 
 func (d *PostgresDriver) GetTableData(schema, table string, page, pageSize int) (*TableDataResult, error) {
@@ -1741,7 +1711,7 @@ func (d *PostgresDriver) ListObjectsByType(schema, objectType string, opts ListO
 		countSQL = `SELECT COUNT(*) FROM pg_type t JOIN pg_namespace n ON t.typnamespace=n.oid
 			WHERE n.nspname=$1 AND t.typtype IN ('c','d','e','r','m')
 			AND n.nspname NOT IN ('pg_catalog','information_schema','pg_toast')
-			AND NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.reltype = t.oid AND c.relkind IN ('r','p'))
+			AND NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.reltype = t.oid AND c.relkind IN ('r','p','v','m'))
 			AND ($2='' OR t.typname LIKE $2)`
 		countArgs = []interface{}{schema, keyword}
 		dataSQL = `SELECT t.typname,
@@ -1750,7 +1720,7 @@ func (d *PostgresDriver) ListObjectsByType(schema, objectType string, opts ListO
 			FROM pg_type t JOIN pg_namespace n ON t.typnamespace=n.oid
 			WHERE n.nspname=$1 AND t.typtype IN ('c','d','e','r','m')
 			AND n.nspname NOT IN ('pg_catalog','information_schema','pg_toast')
-			AND NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.reltype = t.oid AND c.relkind IN ('r','p'))
+			AND NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.reltype = t.oid AND c.relkind IN ('r','p','v','m'))
 			AND ($2='' OR t.typname LIKE $2)
 			ORDER BY t.typname LIMIT $3 OFFSET $4`
 		dataArgs = []interface{}{schema, keyword, opts.PageSize, offset}
@@ -2322,6 +2292,20 @@ func (d *PostgresDriver) GenerateDropDDL(schema, objectType, name string) (strin
 		return fmt.Sprintf("DROP SEQUENCE %s", qualified), nil
 	case ObjectTypeType:
 		return fmt.Sprintf("DROP TYPE %s", qualified), nil
+	case ObjectTypeTrigger:
+		// PostgreSQL requires table name for DROP TRIGGER
+		var tableName string
+		err := d.db.QueryRow(
+			`SELECT c.relname FROM pg_trigger t 
+			 JOIN pg_class c ON t.tgrelid=c.oid 
+			 JOIN pg_namespace n ON c.relnamespace=n.oid 
+			 WHERE t.tgname=$1 AND n.nspname=$2`,
+			name, schema,
+		).Scan(&tableName)
+		if err != nil {
+			return "", fmt.Errorf("failed to find table for trigger %s: %w", name, err)
+		}
+		return fmt.Sprintf(`DROP TRIGGER "%s" ON "%s"."%s"`, name, schema, tableName), nil
 	default:
 		return "", fmt.Errorf("unsupported object type: %s", objectType)
 	}

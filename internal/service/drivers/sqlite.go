@@ -242,17 +242,12 @@ func (d *SQLiteDriver) ExecuteQuery(sqlStr string, schema string) (*QueryResult,
 	}
 
 	start := time.Now()
-	rows, err := d.db.Query(sqlStr)
-	if err != nil {
-		return nil, err
+	if MayReturnResultSet(sqlStr) {
+		return executeWithFallback(d.db, sqlStr, start, false)
 	}
-	defer rows.Close()
 
-	cols, data, err := ScanQueryResult(rows)
-	if err != nil {
-		return nil, err
-	}
-	return &QueryResult{Columns: cols, Rows: data, Duration: time.Since(start).Milliseconds()}, nil
+	// Direct exec for definite DDL/DML
+	return executeViaExec(d.db, sqlStr, start, false)
 }
 
 func (d *SQLiteDriver) GetTableData(schema, table string, page, pageSize int) (*TableDataResult, error) {
@@ -275,6 +270,13 @@ func (d *SQLiteDriver) GetTableData(schema, table string, page, pageSize int) (*
 	defer rows.Close()
 
 	columns, _ := rows.Columns()
+
+	// Replace empty column names with default names
+	for i, name := range columns {
+		if strings.TrimSpace(name) == "" {
+			columns[i] = fmt.Sprintf("Column%d", i+1)
+		}
+	}
 
 	var data [][]interface{}
 	for rows.Next() {

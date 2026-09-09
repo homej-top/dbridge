@@ -1576,3 +1576,34 @@ func (s *TableManagerService) ExecuteViewDDL(dsID, schema, view, sql, database s
 		"duration":  result.Duration,
 	}, nil
 }
+
+// UpdateView updates an existing view by replacing its definition.
+// For databases without CREATE OR REPLACE support (SQL Server, etc.),
+// this will generate DROP + CREATE statements.
+func (s *TableManagerService) UpdateView(dsID, schema, view, definition, database string) (map[string]interface{}, error) {
+	driver, err := s.connectDriverForDB(dsID, database)
+	if err != nil {
+		return nil, fmt.Errorf("connect driver: %w", err)
+	}
+	defer driver.Close()
+
+	// Generate ALTER DDL (DROP + CREATE for SQL Server, or CREATE OR REPLACE for others)
+	statements, err := driver.GenerateAlterDDL(schema, "view", view, definition)
+	if err != nil {
+		return nil, fmt.Errorf("generate alter DDL: %w", err)
+	}
+
+	// Execute each statement
+	for _, stmt := range statements {
+		_, err := driver.ExecuteQuery(stmt, schema)
+		if err != nil {
+			return nil, fmt.Errorf("exec statement failed: %w\nSQL: %s", err, stmt)
+		}
+	}
+
+	return map[string]interface{}{
+		"success":  true,
+		"message":  fmt.Sprintf("View '%s' updated successfully", view),
+		"statements_executed": len(statements),
+	}, nil
+}

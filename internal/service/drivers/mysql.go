@@ -292,42 +292,12 @@ func (d *MySQLDriver) ExecuteQuery(sql string, schema string) (*QueryResult, err
 	}
 
 	start := time.Now()
-	isSelect := IsSelectStatement(sql)
-
-	if isSelect {
-		rows, err := d.db.Query(sql)
-		if err != nil {
-			return nil, fmt.Errorf("query error: %w", err)
-		}
-		defer rows.Close()
-
-		colNames, resultRows, err := ScanQueryResult(rows)
-		if err != nil {
-			return nil, err
-		}
-		return &QueryResult{
-			Columns:   colNames,
-			Rows:      resultRows,
-			TotalRows: int64(len(resultRows)),
-			Duration:  time.Since(start).Milliseconds(),
-			IsSelect:  true,
-		}, nil
+	if MayReturnResultSet(sql) {
+		return executeWithFallback(d.db, sql, start, false)
 	}
 
-	res, err := d.db.Exec(sql)
-	if err != nil {
-		return nil, fmt.Errorf("exec error: %w", err)
-	}
-	affected, _ := res.RowsAffected()
-	msg := fmt.Sprintf("Query OK, %d rows affected", affected)
-	return &QueryResult{
-		Columns:      []string{"result"},
-		Rows:         [][]interface{}{{msg}},
-		TotalRows:    1,
-		Duration:     time.Since(start).Milliseconds(),
-		IsSelect:     false,
-		AffectedRows: affected,
-	}, nil
+	// Direct exec for definite DDL/DML
+	return executeViaExec(d.db, sql, start, false)
 }
 
 func (d *MySQLDriver) GetTableData(schema, table string, page, pageSize int) (*TableDataResult, error) {

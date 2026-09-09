@@ -93,30 +93,43 @@ func (s *QueryService) Execute(input QueryInput) (*QueryOutput, error) {
 		return s.executeSQLServerSchemaRename(driver, matches[1], matches[2], start)
 	}
 
-	switch input.Category {
-	case "data":
-		out, err := s.executePagedQuery(driver, input, start)
-		if err != nil {
-			return s.executeDirect(driver, input, start, "data")
-		}
-		return out, nil
-	case "meta":
-		return s.executeMeta(driver, input, start)
-	case "other":
-		return s.executeOther(driver, input, start)
-	default:
-		// Backward compatibility: no category provided — use old prefix matching
-		lower := strings.ToLower(strings.TrimSpace(input.SQL))
-		isSelect := strings.HasPrefix(lower, "select") ||
-			strings.HasPrefix(lower, "show ") ||
-			strings.HasPrefix(lower, "describe ") ||
-			strings.HasPrefix(lower, "desc ") ||
-			strings.HasPrefix(lower, "explain ")
-		if isSelect {
-			return s.executePagedQuery(driver, input, start)
-		}
-		return s.executeOther(driver, input, start)
+	// Unified execution path - let the driver decide how to execute
+	result, err := driver.ExecuteQuery(input.SQL, input.Schema)
+	if err != nil {
+		return nil, fmt.Errorf("execution error: %w", err)
 	}
+
+	// Determine mode based on actual result structure
+	mode := s.determineMode(result)
+
+	return &QueryOutput{
+		Columns:      result.Columns,
+		Rows:         result.Rows,
+		TotalRows:    result.TotalRows,
+		Duration:     time.Since(start).Milliseconds(),
+		Mode:         mode,
+		AffectedRows: result.AffectedRows,
+	}, nil
+}
+
+// determineMode automatically selects the display mode based on query result structure
+func (s *QueryService) determineMode(result *drivers.QueryResult) string {
+	// Case 1: Has columns → table mode (SELECT, SHOW, EXEC with results, empty tables, etc.)
+	if len(result.Columns) > 0 {
+		// Check if it's a single-column message format (from Exec fallback)
+		if len(result.Columns) == 1 && result.Columns[0] == "result" && len(result.Rows) == 1 {
+			return "message"
+		}
+		return "data"
+	}
+
+	// Case 2: No columns but has affected rows → message mode (DDL/DML)
+	if result.AffectedRows > 0 {
+		return "message"
+	}
+
+	// Case 3: Empty result → message mode
+	return "message"
 }
 
 // connectDriver creates a DatabaseDriver through the global pool manager.

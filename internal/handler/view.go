@@ -42,6 +42,14 @@ type viewDDLRequest struct {
 	Database     string `json:"database"` // optional, for PG/MSSQL
 }
 
+type viewUpdateRequest struct {
+	DataSourceID string `json:"data_source_id" binding:"required"`
+	Schema       string `json:"schema"`
+	View         string `json:"view" binding:"required"`
+	Definition   string `json:"definition" binding:"required"`
+	Database     string `json:"database"` // optional, for PG/MSSQL
+}
+
 // ─── Handlers ──────────────────────────────────────────────────────────────
 
 // Structure returns the column definitions and DDL for a view.
@@ -89,6 +97,24 @@ func (h *ViewHandler) ExecuteDDL(c *gin.Context) {
 	result, err := h.svc.ExecuteViewDDL(req.DataSourceID, req.Schema, req.View, req.SQL, req.Database)
 	if err != nil {
 		h.logger.Error("execute view DDL failed", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse(model.CodeDatabaseError, err.Error()))
+		return
+	}
+	c.JSON(http.StatusOK, model.SuccessResponse(result))
+}
+
+// Update updates an existing view by replacing its definition.
+// For SQL Server and other databases without CREATE OR REPLACE support,
+// this will generate DROP + CREATE statements.
+func (h *ViewHandler) Update(c *gin.Context) {
+	var req viewUpdateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error()))
+		return
+	}
+	result, err := h.svc.UpdateView(req.DataSourceID, req.Schema, req.View, req.Definition, req.Database)
+	if err != nil {
+		h.logger.Error("update view failed", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse(model.CodeDatabaseError, err.Error()))
 		return
 	}

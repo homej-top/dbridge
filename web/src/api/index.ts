@@ -259,6 +259,8 @@ export const viewAPI = {
     request.post('/view/structure', data, { timeout: 30000 }),
   definition: (data: { data_source_id: string; schema?: string; view: string; database?: string }) =>
     request.post('/view/definition', data, { timeout: 30000 }),
+  update: (data: { data_source_id: string; schema?: string; view: string; definition: string; database?: string }) =>
+    request.post('/view/update', data, { timeout: 60000 }),
   executeDDL: (data: { data_source_id: string; schema?: string; view?: string; sql: string; database?: string }) =>
     request.post('/view/ddl-exec', data, { timeout: 30000 }),
 };

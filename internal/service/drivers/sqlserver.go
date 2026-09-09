@@ -340,49 +340,13 @@ func (d *SQLServerDriver) ExecuteQuery(sql string, schema string) (*QueryResult,
 	}
 
 	start := time.Now()
-	isSelect := IsSelectStatement(sql)
-
-	if isSelect {
-		rows, err := d.db.Query(sql)
-		if err != nil {
-			return nil, fmt.Errorf("query error: %w", err)
-		}
-		defer rows.Close()
-
-		colNames, resultRows, err := ScanQueryResult(rows)
-		if err != nil {
-			return nil, err
-		}
-		return &QueryResult{
-			Columns:   colNames,
-			Rows:      resultRows,
-			TotalRows: int64(len(resultRows)),
-			Duration:  time.Since(start).Milliseconds(),
-			IsSelect:  true,
-		}, nil
+	if MayReturnResultSet(sql) {
+		// SQL Server needs QUOTED_IDENTIFIER ON for some statements
+		return executeWithFallback(d.db, sql, start, true)
 	}
 
-	// Ensure QUOTED_IDENTIFIER is ON for non-SELECT statements.
-	// Skip for CREATE SCHEMA/CREATE VIEW which must be first in batch.
-	batchSQL := sql
-	upper := strings.ToUpper(strings.TrimSpace(sql))
-	if !strings.HasPrefix(upper, "CREATE SCHEMA") && !strings.HasPrefix(upper, "CREATE VIEW") && !strings.HasPrefix(upper, "CREATE OR ALTER VIEW") {
-		batchSQL = "SET QUOTED_IDENTIFIER ON; " + sql
-	}
-	res, err := d.db.Exec(batchSQL)
-	if err != nil {
-		return nil, fmt.Errorf("exec error: %w", err)
-	}
-	affected, _ := res.RowsAffected()
-	msg := fmt.Sprintf("Query OK, %d rows affected", affected)
-	return &QueryResult{
-		Columns:      []string{"result"},
-		Rows:         [][]interface{}{{msg}},
-		TotalRows:    1,
-		Duration:     time.Since(start).Milliseconds(),
-		IsSelect:     false,
-		AffectedRows: affected,
-	}, nil
+	// Direct exec for definite DDL/DML
+	return executeViaExec(d.db, sql, start, true)
 }
 
 func (d *SQLServerDriver) GetTableData(schema, table string, page, pageSize int) (*TableDataResult, error) {
@@ -427,6 +391,27 @@ func (d *SQLServerDriver) GetTableData(schema, table string, page, pageSize int)
 // ─── DDL Execution ────────────────────────────────────────────────────────
 
 func (d *SQLServerDriver) ExecuteDDL(ddl string) (int64, error) {
+	// Special handling for CREATE SCHEMA in SQL Server
+	// SQL Server requires CREATE SCHEMA to be in a separate transaction
+	// and doesn't support IF NOT EXISTS, so we need to check first
+	upperDDL := strings.ToUpper(strings.TrimSpace(ddl))
+	if strings.HasPrefix(upperDDL, "CREATE SCHEMA") {
+		// Extract schema name from CREATE SCHEMA [schema_name]
+		parts := strings.Fields(ddl)
+		if len(parts) >= 3 {
+			schemaName := strings.Trim(parts[2], "[]\"`")
+			// Check if schema already exists
+			var count int
+			err := d.db.QueryRow("SELECT COUNT(*) FROM sys.schemas WHERE name = @p1", schemaName).Scan(&count)
+			if err != nil {
+				return 0, fmt.Errorf("check schema existence: %w", err)
+			}
+			if count > 0 {
+				return 0, fmt.Errorf("schema '%s' already exists", schemaName)
+			}
+		}
+	}
+
 	res, err := d.db.Exec(ddl)
 	if err != nil {
 		return 0, err
@@ -2631,7 +2616,22 @@ END;`, nil
 }
 
 func (d *SQLServerDriver) GenerateAlterDDL(schema, objectType, name, newDef string) ([]string, error) {
-	return []string{newDef}, nil
+	switch objectType {
+	case ObjectTypeProcedure, ObjectTypeFunction, ObjectTypeTrigger, "view":
+		// SQL Server doesn't support CREATE OR REPLACE, so use DROP + CREATE
+		dropDDL, err := d.GenerateDropDDL(schema, objectType, name)
+		if err != nil {
+			return nil, err
+		}
+		// For views, wrap the definition in CREATE VIEW statement if not already present
+		createDDL := newDef
+		if !strings.HasPrefix(strings.ToUpper(strings.TrimSpace(newDef)), "CREATE") {
+			createDDL = fmt.Sprintf("CREATE VIEW [%s].[%s] AS %s", schema, name, newDef)
+		}
+		return []string{dropDDL, createDDL}, nil
+	default:
+		return []string{newDef}, nil
+	}
 }
 
 func (d *SQLServerDriver) GenerateDropDDL(schema, objectType, name string) (string, error) {
@@ -2645,6 +2645,8 @@ func (d *SQLServerDriver) GenerateDropDDL(schema, objectType, name string) (stri
 		return fmt.Sprintf("DROP TRIGGER %s", qualified), nil
 	case ObjectTypeType:
 		return fmt.Sprintf("DROP TYPE %s", qualified), nil
+	case "view":
+		return fmt.Sprintf("DROP VIEW %s", qualified), nil
 	default:
 		return "", fmt.Errorf("unsupported object type: %s", objectType)
 	}

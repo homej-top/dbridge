@@ -380,6 +380,15 @@ func (d *OracleDriver) GetViewDefinition(schema, view string) (string, error) {
 		return "CREATE OR REPLACE VIEW " + view + " AS\n" + text.String, nil
 	}
 
+	// Try DBA_VIEWS if ALL_VIEWS failed (requires DBA privilege)
+	err = d.db.QueryRow(
+		`SELECT TEXT FROM dba_views WHERE OWNER = :1 AND VIEW_NAME = :2`,
+		schema, view,
+	).Scan(&text)
+	if err == nil && text.Valid && text.String != "" {
+		return "CREATE OR REPLACE VIEW " + schema + "." + view + " AS\n" + text.String, nil
+	}
+
 	// Last resort: DBMS_METADATA
 	err = d.db.QueryRow(
 		`SELECT DBMS_METADATA.GET_DDL('VIEW', :1, :2) FROM DUAL`,
@@ -389,7 +398,7 @@ func (d *OracleDriver) GetViewDefinition(schema, view string) (string, error) {
 		return text.String, nil
 	}
 
-	return "", fmt.Errorf("view %s.%s not found or not accessible", schema, view)
+	return "", fmt.Errorf("view %s.%s not found or insufficient privileges to access definition", schema, view)
 }
 
 // translateOracleShowCommand translates SQL*Plus SHOW commands to SQL equivalents.
@@ -446,48 +455,18 @@ func (d *OracleDriver) ExecuteQuery(sql string, schema string) (*QueryResult, er
 	sql = translateOracleShowCommand(sql)
 
 	start := time.Now()
-	isSelect := IsSelectStatement(sql)
-
-	if isSelect {
-		rows, err := d.db.Query(sql)
-		if err != nil {
-			return nil, fmt.Errorf("query error: %w", err)
-		}
-		defer rows.Close()
-
-		colNames, resultRows, err := ScanQueryResult(rows)
-		if err != nil {
-			return nil, err
-		}
-		return &QueryResult{
-			Columns:   colNames,
-			Rows:      resultRows,
-			TotalRows: int64(len(resultRows)),
-			Duration:  time.Since(start).Milliseconds(),
-			IsSelect:  true,
-		}, nil
-	}
-
-	// go-ora does not support multiple ;-separated statements in a single Exec call.
-	// Split multi-statement DDL and execute each part individually.
-	if !isSelect && strings.Contains(sql, ";") {
+	
+	// Handle multi-statement DDL (semicolon-separated)
+	if MayReturnResultSet(sql) && strings.Contains(sql, ";") {
 		return d.executeMultiStatement(sql, start)
 	}
-
-	res, err := d.db.Exec(sql)
-	if err != nil {
-		return nil, fmt.Errorf("exec error: %w", err)
+	
+	if MayReturnResultSet(sql) {
+		return executeWithFallback(d.db, sql, start, false)
 	}
-	affected, _ := res.RowsAffected()
-	msg := fmt.Sprintf("Query OK, %d rows affected", affected)
-	return &QueryResult{
-		Columns:      []string{"result"},
-		Rows:         [][]interface{}{{msg}},
-		TotalRows:    1,
-		Duration:     time.Since(start).Milliseconds(),
-		IsSelect:     false,
-		AffectedRows: affected,
-	}, nil
+
+	// Direct exec for definite DDL/DML
+	return executeViaExec(d.db, sql, start, false)
 }
 
 // executeMultiStatement splits Oracle DDL by ; and executes each part.
@@ -1665,7 +1644,7 @@ func (d *OracleDriver) ListObjectsByType(schema, objectType string, opts ListOpt
 	case ObjectTypeType:
 		countSQL = `SELECT COUNT(*) FROM all_types WHERE owner=:1 AND (:2 IS NULL OR :3='' OR type_name LIKE :4)`
 		countArgs = []interface{}{schema, keyword, keyword, keyword}
-		dataSQL = `SELECT type_name, COALESCE(typecode,''), '', ''
+		dataSQL = `SELECT type_name, NVL(typecode,''), NVL('',''), NVL('','')
 			FROM all_types WHERE owner=:1 AND (:2 IS NULL OR :3='' OR type_name LIKE :4)
 			ORDER BY type_name OFFSET :5 ROWS FETCH NEXT :6 ROWS ONLY`
 		dataArgs = []interface{}{schema, keyword, keyword, keyword, offset, opts.PageSize}
@@ -1686,12 +1665,18 @@ func (d *OracleDriver) ListObjectsByType(schema, objectType string, opts ListOpt
 
 	var objects []DBObject
 	for rows.Next() {
-		var obj DBObject
-		if err := rows.Scan(&obj.Name, &obj.Status, &obj.CreatedAt, &obj.UpdatedAt); err != nil {
+		var name, status, createdAt, updatedAt sql.NullString
+		if err := rows.Scan(&name, &status, &createdAt, &updatedAt); err != nil {
 			return nil, fmt.Errorf("scan object failed: %w", err)
 		}
-		obj.Type = objectType
-		obj.Schema = schema
+		obj := DBObject{
+			Name:      name.String,
+			Status:    status.String,
+			CreatedAt: createdAt.String,
+			UpdatedAt: updatedAt.String,
+			Type:      objectType,
+			Schema:    schema,
+		}
 		objects = append(objects, obj)
 	}
 	if err := rows.Err(); err != nil {

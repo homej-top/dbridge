@@ -191,7 +191,7 @@ interface SchemaTreeProps {
   selectedKey?: string;
   onSelect?: (key: string, context: { database?: string; schema?: string; user?: string; table?: string; isView?: boolean; objectType?: string }) => void;
   onCreate?: (levelKey: string, parentName?: string) => void;
-  refreshTrigger?: number;
+  refreshTrigger?: number | { type: 'object-created'; objectType: string; schema: string; database?: string };
   /** Show tables/views under schema nodes. When false, tree stops at schema level. Default: true */
   showTables?: boolean;
   /** Callback when a table action is triggered from the three-dot menu */
@@ -222,10 +222,21 @@ const SchemaTree: React.FC<SchemaTreeProps> = ({
   const [meta, setMeta] = useState<TreeMetadata | null>(null);
   const [loading, setLoading] = useState(true);
   const [treeDataRaw, setTreeDataRaw] = useState<DataNode[]>([]);
-  const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([]);
+  // Initialize expandedKeys from localStorage if available
+  const [expandedKeys, setExpandedKeys] = useState<React.Key[]>(() => {
+    const saved = localStorage.getItem(`schema-tree-expanded-${dataSourceId}`);
+    return saved ? JSON.parse(saved) : [];
+  });
   const [searchText, setSearchText] = useState('');
   const loadedRef = React.useRef<Set<string>>(new Set());
   const loadingRef = React.useRef<Set<string>>(new Set()); // Track nodes currently being loaded
+  const expandedKeysRef = React.useRef<React.Key[]>([]); // Ref to persist expanded keys across refreshes
+
+  // Keep the ref in sync with state and save to localStorage
+  React.useEffect(() => {
+    expandedKeysRef.current = expandedKeys;
+    localStorage.setItem(`schema-tree-expanded-${dataSourceId}`, JSON.stringify(expandedKeys));
+  }, [expandedKeys, dataSourceId]);
 
   // Sync the schemaActionRef so renderSchemaTitle can access onSchemaAction
   schemaActionRef.current = onSchemaAction || null;
@@ -315,6 +326,7 @@ const SchemaTree: React.FC<SchemaTreeProps> = ({
 
   // Track previous dataSourceId to detect data source changes
   const prevDataSourceIdRef = React.useRef<string>('');
+  const prevRefreshTriggerRef = React.useRef<number | { type: 'object-created'; objectType: string; schema: string; database?: string }>(0);
 
   // Initial load
   useEffect(() => {
@@ -326,10 +338,13 @@ const SchemaTree: React.FC<SchemaTreeProps> = ({
     
     const isDataSourceChanged = prevDataSourceIdRef.current !== dataSourceId;
     prevDataSourceIdRef.current = dataSourceId;
+    prevRefreshTriggerRef.current = refreshTrigger;
+    
+    console.log('[SchemaTree] useEffect triggered, refreshTrigger:', refreshTrigger, 'dataSourceId:', dataSourceId);
     
     let cancelled = false;
-    // Save current expanded keys before refresh
-    const savedExpandedKeys = expandedKeys;
+    // Use ref to get the latest expanded keys (more reliable than state in async context)
+    const savedExpandedKeys = expandedKeysRef.current;
     
     // Only clear tree data when data source changes, not on refresh
     if (isDataSourceChanged) {
@@ -340,15 +355,185 @@ const SchemaTree: React.FC<SchemaTreeProps> = ({
       const m = await loadMeta();
       if (cancelled || !m) return;
       
-      // Only reload root nodes and clear cache when data source changes
-      if (isDataSourceChanged) {
+      // Check if this is a targeted refresh (object created)
+      const isTargetedRefresh = typeof refreshTrigger === 'object' && refreshTrigger.type === 'object-created';
+      
+      if (isTargetedRefresh && !isDataSourceChanged) {
+        // Targeted refresh: only reload the specific folder that was affected
+        const { objectType, schema, database } = refreshTrigger;
+        console.log('[SchemaTree] Targeted refresh for:', { objectType, schema, database });
+        
+        // Map objectType to folder type (use singular form to match tree node keys)
+        let folderType: string | null = null;
+        if (objectType === 'view') folderType = 'views_folder';
+        else if (objectType === 'table') folderType = 'tables_folder';
+        else if (objectType === 'procedure') folderType = 'procedure_folder';
+        else if (objectType === 'function') folderType = 'function_folder';
+        else if (objectType === 'trigger') folderType = 'trigger_folder';
+        else if (objectType === 'type') folderType = 'type_folder';
+        else if (objectType === 'event') folderType = 'event_folder';
+        else if (objectType === 'matview') folderType = 'matview_folder';
+        else if (objectType === 'sequence') folderType = 'sequence_folder';
+        else if (objectType === 'synonym') folderType = 'synonym_folder';
+        else if (objectType === 'package') folderType = 'package_folder';
+        
+        console.log('[SchemaTree] Mapped folderType:', folderType);
+        
+        if (folderType && schema) {
+          // Construct the folder key (e.g., "views_folder-test-dbo")
+          const folderKey = database 
+            ? `${folderType}-${database}-${schema}`
+            : `${folderType}-${schema}`;
+          
+          console.log('[SchemaTree] Folder key:', folderKey);
+          console.log('[SchemaTree] Expanded keys:', savedExpandedKeys);
+          console.log('[SchemaTree] Is folder expanded?', savedExpandedKeys.includes(folderKey));
+          
+          // Clear the cache for this specific folder
+          loadedRef.current.delete(folderKey);
+          
+          // If the folder is currently expanded, directly reload its content
+          if (savedExpandedKeys.includes(folderKey)) {
+            try {
+              // Reload folder content based on folder type
+              if (folderType === 'tables_folder' || folderType === 'views_folder') {
+                const res = await dsAPI.tableList(dataSourceId, schema, database);
+                const items: any[] = Array.isArray(res.data) ? res.data : res.data?.data || res.data?.list || [];
+                const filtered = items.filter((i: any) =>
+                  folderType === 'tables_folder' ? i.type === 'table' : i.type === 'view'
+                );
+
+                const children: DataNode[] = filtered.map((item: any) => {
+                  const isView = item.type === 'view';
+                  const key = database
+                    ? `${item.type}-${database}-${schema}-${item.name}`
+                    : `${item.type}-${schema}-${item.name}`;
+                  return {
+                    title: onTableAction ? (
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</span>
+                        <Dropdown
+                          menu={{
+                            items: [
+                              { key: 'structure', label: isView ? tr('query.viewDefinition') : tr('query.viewStructure'), icon: <CodeOutlined /> },
+                              { key: 'copy-ddl', label: tr('query.copyDdl'), icon: <CopyOutlined /> },
+                              { key: 'export', label: tr('query.exportTable'), icon: <ExportOutlined /> },
+                              { type: 'divider' as const },
+                              { key: 'delete', label: isView ? tr('query.deleteView') : tr('query.deleteTable'), danger: true, icon: <DeleteOutlined /> },
+                            ],
+                            onClick: ({ key: actionKey }: { key: string }) => {
+                              onTableAction!(actionKey, schema, item.name, isView, database);
+                            },
+                          }}
+                          trigger={['click']}
+                          placement="bottomRight"
+                        >
+                          <Button
+                            type="text"
+                            size="small"
+                            icon={<MoreOutlined style={{ fontSize: 14 }} />}
+                            onClick={(e) => e.stopPropagation()}
+                            style={{ flexShrink: 0, opacity: 0.5 }}
+                          />
+                        </Dropdown>
+                      </div>
+                    ) : (
+                      item.name
+                    ),
+                    key,
+                    icon: isView ? <EyeOutlined /> : <TableOutlined />,
+                    isLeaf: true,
+                  };
+                });
+
+                setTreeDataRaw((prev) => updateTreeNodeChildren(prev, folderKey, children));
+              } else if (isObjectFolderKey(folderType)) {
+                // Handle other object types (procedures, functions, triggers, etc.)
+                const objType = objectTypeFromFolderKey(folderType);
+                const res = await dsAPI.listObjectsByType(dataSourceId, schema, objType, { database });
+                const result: any = res.data?.data || res.data;
+                const objects: any[] = result?.list || [];
+
+                const children: DataNode[] = objects.map((obj: any) => {
+                  const actualSchema = obj.schema || schema;
+                  const itemKey = database
+                    ? `${objType}-${database}-${actualSchema}-${obj.name}`
+                    : `${objType}-${actualSchema}-${obj.name}`;
+                  const info = OBJECT_FOLDER_INFO[objType];
+                  const menuItems: any[] = [
+                    { key: 'copy-ddl', label: tr('query.copyObjectDdl'), icon: <CopyOutlined /> },
+                  ];
+                  if (objType === 'matview') {
+                    menuItems.push(
+                      { type: 'divider' as const },
+                      { key: 'refresh', label: tr('objects.refreshMatView'), icon: <ReloadOutlined /> },
+                      { key: 'refresh-concurrently', label: tr('objects.refreshMatViewConcurrently'), icon: <ReloadOutlined /> },
+                      { key: 'refresh-with-no-data', label: tr('objects.refreshMatViewNoData'), icon: <ReloadOutlined /> },
+                    );
+                  }
+                  menuItems.push(
+                    { type: 'divider' as const },
+                    { key: 'delete', label: tr('common.delete'), danger: true, icon: <DeleteOutlined /> },
+                  );
+                  return {
+                    title: onObjectAction ? (
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{obj.name}</span>
+                        <Dropdown
+                          menu={{
+                            items: menuItems,
+                            onClick: ({ key: actionKey }: { key: string }) => {
+                              onObjectAction!(actionKey, schema, objType, obj.name, database);
+                            },
+                          }}
+                          trigger={['click']}
+                          placement="bottomRight"
+                        >
+                          <Button
+                            type="text"
+                            size="small"
+                            icon={<MoreOutlined style={{ fontSize: 14 }} />}
+                            onClick={(e) => e.stopPropagation()}
+                            style={{ flexShrink: 0, opacity: 0.5 }}
+                          />
+                        </Dropdown>
+                      </div>
+                    ) : (
+                      obj.name
+                    ),
+                    key: itemKey,
+                    icon: info?.icon || <CodeOutlined />,
+                    isLeaf: true,
+                  };
+                });
+
+                setTreeDataRaw((prev) => updateTreeNodeChildren(prev, folderKey, children));
+              }
+              
+              // Mark as loaded
+              loadedRef.current.add(folderKey);
+            } catch {
+              // Ignore reload errors
+            }
+          }
+        }
+        return;
+      }
+      
+      // Full refresh: reload root nodes when data source changes or tree is empty
+      if (isDataSourceChanged || treeDataRaw.length === 0) {
         await loadRootNodes(m);
         loadedRef.current.clear();
       }
       
-      // Restore expanded keys after refresh
+      // Restore expanded keys after initial load or data source change (with a small delay to ensure tree is rendered)
       if (!cancelled && savedExpandedKeys.length > 0) {
-        setExpandedKeys(savedExpandedKeys);
+        // Use setTimeout to ensure the tree has finished rendering before restoring expanded state
+        setTimeout(() => {
+          if (!cancelled) {
+            setExpandedKeys(savedExpandedKeys);
+          }
+        }, 50);
       }
     })();
     return () => { cancelled = true; };
@@ -775,6 +960,8 @@ const SchemaTree: React.FC<SchemaTreeProps> = ({
           icon={<ReloadOutlined />}
           onClick={() => {
             loadedRef.current.clear();
+            loadingRef.current.clear();
+            setExpandedKeys([]);
             loadMeta().then((m) => m && loadRootNodes(m));
           }}
         />
@@ -804,4 +991,4 @@ const SchemaTree: React.FC<SchemaTreeProps> = ({
   );
 };
 
-export default SchemaTree;
+export default React.memo(SchemaTree);

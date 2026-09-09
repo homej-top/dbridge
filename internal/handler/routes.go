@@ -145,6 +145,7 @@ func RegisterRoutes(r *gin.RouterGroup, cfg *config.Config, logger *zap.Logger) 
 	{
 		view.POST("/structure", viewHandler.Structure)
 		view.POST("/definition", viewHandler.Definition)
+		view.POST("/update", middleware.RequireRole("admin", "operator"), viewHandler.Update)
 		view.POST("/ddl-exec", middleware.RequireRole("admin", "operator"), viewHandler.ExecuteDDL)
 	}
 

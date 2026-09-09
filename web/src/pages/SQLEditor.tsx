@@ -113,7 +113,7 @@ interface ObjectTab extends BaseTab {
 type TabItem = TableTab | SqlTab | SchemaListTab | ObjectTab;
 
 let tabIdCounter = 0;
-const nextTabId = () => `tab-${++tabIdCounter}`;
+const nextTabId = () => `tab-${Date.now()}-${++tabIdCounter}`;
 
 // --- Component ---
 
@@ -297,7 +297,7 @@ const SQLEditor: React.FC = () => {
   const [_exportContext, setExportContext] = useState<{ sql?: string; table?: string; schema?: string; database?: string }>({});
   const [, setActiveTable] = useState<{ schema: string; table: string; isView: boolean } | null>(null);
   const [viewDefOpen, setViewDefOpen] = useState(false);
-  const [viewDef, setViewDef] = useState<{ name: string; definition: string } | null>(null);
+  const [viewDef, setViewDef] = useState<{ name: string; definition: string; schema?: string; database?: string } | null>(null);
   const [viewDefLoading, setViewDefLoading] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; nodeKey: string } | null>(null);
 
@@ -322,7 +322,7 @@ const SQLEditor: React.FC = () => {
   const [queryCreateView, setQueryCreateView] = useState<{ open: boolean; schema: string; database?: string }>({ open: false, schema: '' });
   const [schemaForm, setSchemaForm] = useState<{ open: boolean; mode: 'create' | 'edit'; database?: string; initValues?: { name: string; charset: string; collation: string } }>({ open: false, mode: 'create' });
   const [objectEditor, setObjectEditor] = useState<{ open: boolean; schema: string; objectType: string; objectName?: string; database?: string }>({ open: false, schema: '', objectType: '' });
-  const [treeRefreshKey, setTreeRefreshKey] = useState(0);
+  const [treeRefreshKey, setTreeRefreshKey] = useState<number | { type: 'object-created'; objectType: string; schema: string; database?: string }>(0);
 
   // Get DB type for the tree's current data source
   const treeDbType = useMemo(() => {
@@ -726,18 +726,42 @@ const SQLEditor: React.FC = () => {
   }, [tabs, updateTab, executeQuery, currentSchema]);
 
   // --- Tree select: open table tab ---
-  const parseNodeKey = (key: string): { kind: 'table' | 'view' | 'other'; schema: string; name: string } => {
+  const parseNodeKey = (key: string): { kind: 'table' | 'view' | 'other'; schema: string; name: string; database?: string } => {
     if (key.startsWith('table-')) {
       const rest = key.slice('table-'.length);
-      const idx = rest.indexOf('-');
-      if (idx < 0) return { kind: 'other', schema: '', name: '' };
-      return { kind: 'table', schema: rest.slice(0, idx), name: rest.slice(idx + 1) };
+      const parts = rest.split('-');
+      // Format: table-database-schema-name (PG/MSSQL) or table-schema-name (MySQL/SQLite)
+      if (parts.length >= 3) {
+        // Has database: first part is database, last part is name, middle is schema
+        return { 
+          kind: 'table', 
+          database: parts[0], 
+          schema: parts.slice(1, -1).join('-'), 
+          name: parts[parts.length - 1] 
+        };
+      } else if (parts.length === 2) {
+        // No database
+        return { kind: 'table', schema: parts[0], name: parts[1] };
+      }
+      return { kind: 'other', schema: '', name: '' };
     }
     if (key.startsWith('view-')) {
       const rest = key.slice('view-'.length);
-      const idx = rest.indexOf('-');
-      if (idx < 0) return { kind: 'other', schema: '', name: '' };
-      return { kind: 'view', schema: rest.slice(0, idx), name: rest.slice(idx + 1) };
+      const parts = rest.split('-');
+      // Format: view-database-schema-name (PG/MSSQL) or view-schema-name (MySQL/SQLite)
+      if (parts.length >= 3) {
+        // Has database: first part is database, last part is name, middle is schema
+        return { 
+          kind: 'view', 
+          database: parts[0], 
+          schema: parts.slice(1, -1).join('-'), 
+          name: parts[parts.length - 1] 
+        };
+      } else if (parts.length === 2) {
+        // No database
+        return { kind: 'view', schema: parts[0], name: parts[1] };
+      }
+      return { kind: 'other', schema: '', name: '' };
     }
     return { kind: 'other', schema: '', name: '' };
   };
@@ -865,12 +889,24 @@ const SQLEditor: React.FC = () => {
   }, [tabs, enforceMaxTabs, currentDatabase, currentSchema]);
 
   // --- Tree node actions ---
-  const handleCopyDDL = async (schema: string, table: string) => {
+  const handleCopyDDL = async (schema: string, name: string, isView: boolean = false, database?: string) => {
     if (!treeDSRef.current) return;
     let ddl = '';
     try {
-      const res = await dsAPI.getDdl(treeDSRef.current, schema, table);
-      ddl = res.data.data?.ddl || '';
+      if (isView) {
+        // For views, use viewAPI.definition
+        const res = await viewAPI.definition({ 
+          data_source_id: treeDSRef.current, 
+          schema: schema || undefined, 
+          view: name,
+          database: database || undefined
+        });
+        ddl = res.data.data?.definition || '';
+      } else {
+        // For tables, use dsAPI.getDdl
+        const res = await dsAPI.getDdl(treeDSRef.current, schema, name);
+        ddl = res.data.data?.ddl || '';
+      }
     } catch {
       message.error(tr('query.getDDLFailed'));
       return;
@@ -919,7 +955,7 @@ const SQLEditor: React.FC = () => {
         if (isView) openViewDef(schema, name);
         else openStructureDrawer(schema, name, false);
       } else if (key === 'copy-ddl') {
-        handleCopyDDL(schema, name);
+        handleCopyDDL(schema, name, isView);
       } else if (key === 'export') {
         handleExportTreeNode(schema, name);
       } else if (key === 'delete') {
@@ -949,12 +985,17 @@ const SQLEditor: React.FC = () => {
 
   const openViewDef = async (schema: string, viewName: string, database?: string) => {
     if (!treeDSRef.current) return;
-    setViewDefLoading(true); setViewDef({ name: viewName, definition: '-- loading...' }); setViewDefOpen(true);
+    setViewDefLoading(true); 
+    setViewDef({ name: viewName, definition: '-- loading...', schema, database }); 
+    setViewDefOpen(true);
     try {
       const res = await viewAPI.definition({ data_source_id: treeDSRef.current, schema: schema || undefined, view: viewName, database: database || undefined });
-      setViewDef({ name: viewName, definition: res.data.data?.definition || tr('query.noDefinition') });
-    } catch { setViewDef({ name: viewName, definition: tr('query.fetchFailed') }); }
-    finally { setViewDefLoading(false); }
+      setViewDef({ name: viewName, definition: res.data.data?.definition || tr('query.noDefinition'), schema, database });
+    } catch { 
+      setViewDef({ name: viewName, definition: tr('query.fetchFailed'), schema, database }); 
+    } finally { 
+      setViewDefLoading(false); 
+    }
   };
 
   // --- Context menu ---
@@ -969,9 +1010,10 @@ const SQLEditor: React.FC = () => {
   const handleContextMenuClick = ({ key }: { key: string }) => {
     if (!contextMenu) return;
     const parsed = parseNodeKey(contextMenu.nodeKey);
-    if (key === 'select') openTableTab(parsed.schema, parsed.name, parsed.kind === 'view');
-    else if (key === 'structure') openStructureDrawer(parsed.schema, parsed.name, parsed.kind === 'view');
-    else if (key === 'view-def') openViewDef(parsed.schema, parsed.name);
+    if (key === 'select') openTableTab(parsed.schema, parsed.name, parsed.kind === 'view', parsed.database);
+    else if (key === 'structure') openStructureDrawer(parsed.schema, parsed.name, parsed.kind === 'view', parsed.database);
+    else if (key === 'view-def') openViewDef(parsed.schema, parsed.name, parsed.database);
+    else if (key === 'copy-ddl') handleCopyDDL(parsed.schema, parsed.name, parsed.kind === 'view', parsed.database);
     setContextMenu(null);
   };
 
@@ -1044,8 +1086,14 @@ const SQLEditor: React.FC = () => {
       );
     }
 
-    const columns: any[] = result.columns.map((col) => {
-      const meta = columnMeta[col];
+    // Replace empty column names with default names
+    const displayColumns = result.columns.map((col, idx) =>
+      col.trim() === '' ? `Column${idx + 1}` : col
+    );
+
+    const columns: any[] = displayColumns.map((col, idx) => {
+      const originalCol = result.columns[idx];
+      const meta = columnMeta[originalCol];
       const tooltip = meta ? `${meta.type}${meta.key === 'PRI' ? ' PK' : ''}${meta.nullable ? '' : ' NOT NULL'}${meta.comment ? ' - ' + meta.comment : ''}` : '';
       return {
       title: (
@@ -1062,10 +1110,10 @@ const SQLEditor: React.FC = () => {
                 <Input
                   size="small"
                   placeholder={tr('query.filterPlaceholderShort')}
-                  value={(tab as TableTab).columnFilters?.[col] || ''}
+                  value={(tab as TableTab).columnFilters?.[originalCol] || ''}
                   onChange={(e) => {
                     const t = tab as TableTab;
-                    updateTab(tab.id, { columnFilters: { ...t.columnFilters, [col]: e.target.value } } as any);
+                    updateTab(tab.id, { columnFilters: { ...t.columnFilters, [originalCol]: e.target.value } } as any);
                   }}
                   onPressEnter={() => { if (tab.type === 'table') loadTableTab(tab.id, 1, tab.pageSize); }}
                   onClick={(e) => e.stopPropagation()}
@@ -1074,7 +1122,7 @@ const SQLEditor: React.FC = () => {
             ] : [],
             onClick: ({ key: k }) => {
               if (tab.type === 'table') {
-                const newSort = k === 'sort-asc' ? { column: col, direction: 'asc' as const } : k === 'sort-desc' ? { column: col, direction: 'desc' as const } : null;
+                const newSort = k === 'sort-asc' ? { column: originalCol, direction: 'asc' as const } : k === 'sort-desc' ? { column: originalCol, direction: 'desc' as const } : null;
                 setTabs(prev => prev.map(t => t.id === tab.id ? { ...t, columnSort: newSort, orderBy: '', page: 1 } as TableTab : t));
                 // Defer reload so state is updated
                 setTimeout(() => loadTableTab(tab.id, 1, (tab as TableTab).pageSize), 0);
@@ -1084,27 +1132,38 @@ const SQLEditor: React.FC = () => {
         >
           <span style={{ cursor: 'pointer' }}>
             {col}
-            {tab.type === 'table' && (tab as TableTab).columnSort?.column === col && (
+            {tab.type === 'table' && (tab as TableTab).columnSort?.column === originalCol && (
               (tab as TableTab).columnSort?.direction === 'asc'
                 ? <SortAscendingOutlined style={{ marginLeft: 4, color: '#20a53a' }} />
                 : <SortDescendingOutlined style={{ marginLeft: 4, color: '#20a53a' }} />
             )}
-            {tab.type === 'table' && (tab as TableTab).columnFilters?.[col] && (
+            {tab.type === 'table' && (tab as TableTab).columnFilters?.[originalCol] && (
               <FilterOutlined style={{ marginLeft: 4, color: '#faad14' }} />
             )}
           </span>
         </Dropdown>
         </Tooltip>
       ),
-      dataIndex: col, key: col, width: 160,
+      dataIndex: originalCol, key: originalCol || `col_${idx}`, width: 160,
       ellipsis: { showTitle: false },
-      render: (val: any) => (
-        <Tooltip title={val != null ? String(val) : ''} placement="topLeft">
-          <div style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {val != null ? String(val) : ''}
-          </div>
-        </Tooltip>
-      ),
+      render: (val: any) => {
+        // Handle objects and complex types
+        let displayVal = '';
+        if (val == null) {
+          displayVal = '';
+        } else if (typeof val === 'object') {
+          displayVal = JSON.stringify(val);
+        } else {
+          displayVal = String(val);
+        }
+        return (
+          <Tooltip title={displayVal} placement="topLeft">
+            <div style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {displayVal}
+            </div>
+          </Tooltip>
+        );
+      },
     };
   });
     // Add action column
@@ -1598,10 +1657,9 @@ const SQLEditor: React.FC = () => {
       message.success(`${tr('query.deleted')}: ${name}`);
       setDeleteTarget({ open: false, schema: '', name: '', isView: false });
       setDeleteConfirmName('');
-      // Refresh tree
-      if (treeDSRef.current && currentSchema) {
-        await dsAPI.schemaObjects(treeDSRef.current, currentSchema);
-      }
+      // Refresh tree with targeted refresh
+      const objectType = isView ? 'view' : 'table';
+      setTreeRefreshKey({ type: 'object-created', objectType, schema, database: deleteTarget.database || currentDatabase });
     } catch (err: any) {
       message.error(err?.response?.data?.message || tr('query.deleteFailed'));
     }
@@ -1673,7 +1731,7 @@ const SQLEditor: React.FC = () => {
                     setDrawerOpen(true);
                   }
                 } else if (action === 'copy-ddl') {
-                  handleCopyDDL(schema, table);
+                  handleCopyDDL(schema, table, isView, database);
                 } else if (action === 'export') {
                   setActiveTable({ schema, table, isView });
                   openExportModal({ table, schema, database });
@@ -1713,7 +1771,7 @@ const SQLEditor: React.FC = () => {
                       try {
                         await dsAPI.dropObject(treeDSRef.current, schema, objectType, objectName, { database });
                         message.success(tr('objects.dropSuccess'));
-                        setTreeRefreshKey((k) => k + 1);
+                        setTreeRefreshKey({ type: 'object-created', objectType, schema, database });
                       } catch { /* handled by interceptor */ }
                     },
                   });
@@ -1830,10 +1888,12 @@ const SQLEditor: React.FC = () => {
             if (parsed.kind === 'table') return [
               { key: 'select', label: tr('query.openDataTab') },
               { key: 'structure', label: tr('query.viewStructure') },
+              { key: 'copy-ddl', label: tr('query.copyDdl') },
             ];
             if (parsed.kind === 'view') return [
               { key: 'select', label: tr('query.openDataTab') },
               { key: 'view-def', label: tr('query.viewDefinition') },
+              { key: 'copy-ddl', label: tr('query.copyDdl') },
             ];
             return [];
           })(),
@@ -1849,11 +1909,52 @@ const SQLEditor: React.FC = () => {
         onClose={() => setDrawerOpen(false)} onRefreshTree={refreshTree} />
 
       {/* View definition modal */}
-      <Modal title={`${tr('query.viewDefinition')} · ${viewDef?.name || ''}`} open={viewDefOpen} onCancel={() => setViewDefOpen(false)} footer={null} width={800}>
+      <Modal 
+        title={`${tr('query.viewDefinition')} · ${viewDef?.name || ''}`} 
+        open={viewDefOpen} 
+        onCancel={() => setViewDefOpen(false)} 
+        footer={[
+          <Button key="cancel" onClick={() => setViewDefOpen(false)}>
+            {tr('common.cancelText')}
+          </Button>,
+          <Button 
+            key="save" 
+            type="primary" 
+            loading={viewDefLoading}
+            onClick={async () => {
+              if (!viewDef || !treeDSRef.current) return;
+              setViewDefLoading(true);
+              try {
+                const res = await viewAPI.update({ 
+                  data_source_id: treeDSRef.current, 
+                  schema: viewDef.schema, 
+                  view: viewDef.name, 
+                  definition: viewDef.definition,
+                  database: viewDef.database // Pass database context for SQL Server/PostgreSQL
+                });
+                message.success(res.data.message || 'View updated successfully');
+                setViewDefOpen(false);
+              } catch (e: any) {
+                message.error(e.response?.data?.message || 'Failed to update view');
+              } finally {
+                setViewDefLoading(false);
+              }
+            }}
+          >
+            {tr('common.save')}
+          </Button>,
+        ]} 
+        width={800}
+      >
         <Spin spinning={viewDefLoading}>
           <div style={{ border: '1px solid #d9d9d9', borderRadius: 4 }}>
-            <Editor height={400} defaultLanguage="sql" value={viewDef?.definition || ''}
-              options={{ minimap: { enabled: false }, fontSize: 13, wordWrap: 'on', readOnly: true, scrollBeyondLastLine: false }} />
+            <Editor 
+              height={400} 
+              defaultLanguage="sql" 
+              value={viewDef?.definition || ''}
+              onChange={(val) => setViewDef(prev => prev ? { ...prev, definition: val || '' } : null)}
+              options={{ minimap: { enabled: false }, fontSize: 13, wordWrap: 'on', readOnly: false, scrollBeyondLastLine: false }} 
+            />
           </div>
         </Spin>
       </Modal>
@@ -1906,7 +2007,11 @@ const SQLEditor: React.FC = () => {
         dbType={treeDbType}
         database={queryCreateTable.database}
         onClose={() => setQueryCreateTable({ open: false, schema: '' })}
-        onSuccess={() => { setQueryCreateTable({ open: false, schema: '' }); }}
+        onSuccess={() => { 
+          const { schema, database } = queryCreateTable;
+          setQueryCreateTable({ open: false, schema: '' }); 
+          setTreeRefreshKey({ type: 'object-created', objectType: 'table', schema, database });
+        }}
       />
 
       {/* Create View Modal (from query page) */}
@@ -1917,7 +2022,11 @@ const SQLEditor: React.FC = () => {
         dbType={treeDbType}
         database={queryCreateView.database}
         onClose={() => setQueryCreateView({ open: false, schema: '' })}
-        onSuccess={() => { setQueryCreateView({ open: false, schema: '' }); }}
+        onSuccess={() => { 
+          const { schema, database } = queryCreateView;
+          setQueryCreateView({ open: false, schema: '' }); 
+          setTreeRefreshKey({ type: 'object-created', objectType: 'view', schema, database });
+        }}
       />
 
       <SchemaFormModal
@@ -1929,7 +2038,15 @@ const SQLEditor: React.FC = () => {
         database={schemaForm.database}
         initValues={schemaForm.initValues}
         onClose={() => setSchemaForm({ open: false, mode: 'create' })}
-        onSuccess={() => { setSchemaForm({ open: false, mode: 'create' }); setTreeRefreshKey(k => k + 1); }}
+        onSuccess={() => { 
+          console.log('[SQLEditor] SchemaFormModal onSuccess called');
+          setSchemaForm({ open: false, mode: 'create' });
+          // Delay the refresh to ensure modal is closed first
+          setTimeout(() => {
+            console.log('[SQLEditor] Calling setTreeRefreshKey');
+            setTreeRefreshKey(Date.now());
+          }, 100);
+        }}
       />
 
       <ObjectEditorModal
@@ -1940,7 +2057,10 @@ const SQLEditor: React.FC = () => {
         objectName={objectEditor.objectName}
         database={objectEditor.database}
         onClose={() => setObjectEditor({ open: false, schema: '', objectType: '' })}
-        onSuccess={() => { setTreeRefreshKey(k => k + 1); }}
+        onSuccess={(info) => { 
+          console.log('[SQLEditor] ObjectEditorModal onSuccess received:', info);
+          setTreeRefreshKey({ type: 'object-created', objectType: info.objectType, schema: info.schema, database: info.database });
+        }}
       />
 
       {/* Delete Table/View Confirmation Modal */}

@@ -12,7 +12,7 @@ interface ObjectEditorModalProps {
   objectName?: string;
   database?: string;
   onClose: () => void;
-  onSuccess: () => void;
+  onSuccess: (info: { objectType: string; schema: string; database?: string }) => void;
 }
 
 const ObjectEditorModal: React.FC<ObjectEditorModalProps> = ({
@@ -74,7 +74,8 @@ const ObjectEditorModal: React.FC<ObjectEditorModalProps> = ({
         await dsAPI.createObject(dataSourceId, schema, objectType, { ddl, database });
         message.success(tr('objects.createSuccess'));
       }
-      onSuccess();
+      console.log('[ObjectEditorModal] Calling onSuccess with:', { objectType, schema, database });
+      onSuccess({ objectType, schema, database });
       onClose();
     } catch {
       // Error handled by interceptor

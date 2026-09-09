@@ -98,7 +98,9 @@ const SchemaFormModal: React.FC<SchemaFormModalProps> = ({
       return `ALTER DATABASE [${formName}] MODIFY NAME = [${newName}];`;
     }
     if (mode === 'edit' && dialect === 'sqlserver' && level === 'schema' && newName) {
-      return `-- @RENAME_SCHEMA [${formName}] TO [${newName}]`;
+      // SQL Server doesn't support direct schema renaming.
+      // Need to create new schema and transfer objects manually.
+      return `-- SQL Server does not support direct schema renaming.\n-- Please:\n-- 1. CREATE SCHEMA [${newName}];\n-- 2. Transfer objects: ALTER SCHEMA [${newName}] TRANSFER [${formName}].[object_name];\n-- 3. DROP SCHEMA [${formName}];`;
     }
     if (dialect === 'mysql') {
       const cs = form.getFieldValue('charset') || 'utf8mb4';
@@ -117,6 +119,12 @@ const SchemaFormModal: React.FC<SchemaFormModalProps> = ({
       await form.validateFields();
       if (!ddl) {
         message.warning('没有需要执行的变更');
+        return;
+      }
+      // Check if DDL is only comments (e.g., SQL Server schema rename warning)
+      const ddlLines = ddl.split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('--'));
+      if (ddlLines.length === 0) {
+        message.warning('当前操作不支持自动执行,请手动执行显示的SQL语句');
         return;
       }
       setLoading(true);
