@@ -454,6 +454,11 @@ func (d *OracleDriver) ExecuteQuery(sql string, schema string) (*QueryResult, er
 	// Translate SQL*Plus SHOW commands to SQL equivalents
 	sql = translateOracleShowCommand(sql)
 
+	// Oracle's driver rejects trailing semicolons on single statements.
+	// For multi-statement SQL, executeMultiStatement splits by ';' and trims each part,
+	// so stripping the trailing semicolon is safe for all cases.
+	sql = strings.TrimRight(strings.TrimSpace(sql), ";")
+
 	start := time.Now()
 	
 	// Handle multi-statement DDL (semicolon-separated)
@@ -553,7 +558,8 @@ func (d *OracleDriver) GetTableData(schema, table string, page, pageSize int) (*
 // ─── DDL Execution ────────────────────────────────────────────────────────
 
 func (d *OracleDriver) ExecuteDDL(ddl string) (int64, error) {
-	res, err := d.db.Exec(ddl)
+	cleaned := strings.TrimRight(strings.TrimSpace(ddl), ";")
+	res, err := d.db.Exec(cleaned)
 	if err != nil {
 		return 0, err
 	}
@@ -1699,6 +1705,16 @@ func (d *OracleDriver) GetObjectDefinition(schema, objectType, objectName string
 		if err != nil {
 			body = "-- Package Body not found"
 		}
+		// Ensure spec has CREATE OR REPLACE PACKAGE header
+		upperSpec := strings.ToUpper(strings.TrimSpace(spec))
+		if !strings.HasPrefix(upperSpec, "CREATE") {
+			spec = fmt.Sprintf("CREATE OR REPLACE PACKAGE %s.%s AS\n%s", schema, objectName, spec)
+		}
+		// Ensure body has CREATE OR REPLACE PACKAGE BODY header
+		upperBody := strings.ToUpper(strings.TrimSpace(body))
+		if !strings.HasPrefix(upperBody, "CREATE") {
+			body = fmt.Sprintf("CREATE OR REPLACE PACKAGE BODY %s.%s AS\n%s", schema, objectName, body)
+		}
 		return spec + "\n/\n" + body, nil
 	}
 
@@ -1714,7 +1730,145 @@ func (d *OracleDriver) GetObjectDefinition(schema, objectType, objectName string
 		return definition, nil
 	}
 
+	if objectType == ObjectTypeSynonym {
+		var tableOwner, tableName, dbLink sql.NullString
+		err := d.db.QueryRow(
+			`SELECT table_owner, table_name, db_link
+			 FROM all_synonyms WHERE owner=:1 AND synonym_name=:2`,
+			schema, objectName,
+		).Scan(&tableOwner, &tableName, &dbLink)
+		if err != nil {
+			return "", fmt.Errorf("get synonym definition failed: %w", err)
+		}
+		target := tableName.String
+		if tableOwner.String != "" {
+			target = tableOwner.String + "." + target
+		}
+		ddl := fmt.Sprintf("CREATE OR REPLACE SYNONYM %s.%s FOR %s", schema, objectName, target)
+		if dbLink.String != "" {
+			ddl += "@" + dbLink.String
+		}
+		return ddl, nil
+	}
+
+	if objectType == ObjectTypeSequence {
+		var minVal, maxVal, incr, cacheSize, cycleFlag, orderFlag sql.NullString
+		err := d.db.QueryRow(
+			`SELECT TO_CHAR(min_value), TO_CHAR(max_value), TO_CHAR(increment_by),
+			TO_CHAR(cache_size), cycle_flag, order_flag
+			 FROM all_sequences WHERE sequence_owner=:1 AND sequence_name=:2`,
+			schema, objectName,
+		).Scan(&minVal, &maxVal, &incr, &cacheSize, &cycleFlag, &orderFlag)
+		if err != nil {
+			return "", fmt.Errorf("get sequence definition failed: %w", err)
+		}
+		ddl := fmt.Sprintf("CREATE SEQUENCE %s.%s", schema, objectName)
+		if minVal.String != "" {
+			ddl += "\n\tSTART WITH " + minVal.String
+		}
+		if incr.String != "" {
+			ddl += "\n\tINCREMENT BY " + incr.String
+		}
+		if minVal.String != "" {
+			ddl += "\n\tMINVALUE " + minVal.String
+		}
+		if maxVal.String != "" {
+			ddl += "\n\tMAXVALUE " + maxVal.String
+		}
+		if cacheSize.String != "" && cacheSize.String != "0" {
+			ddl += "\n\tCACHE " + cacheSize.String
+		} else {
+			ddl += "\n\tNOCACHE"
+		}
+		if cycleFlag.String == "Y" {
+			ddl += "\n\tCYCLE"
+		} else {
+			ddl += "\n\tNOCYCLE"
+		}
+		if orderFlag.String == "Y" {
+			ddl += "\n\tORDER"
+		} else {
+			ddl += "\n\tNOORDER"
+		}
+		return ddl, nil
+	}
+
 	oracleType := mapOracleObjectType(objectType)
+
+	if objectType == ObjectTypeType {
+		var typecode sql.NullString
+		err := d.db.QueryRow(
+			`SELECT typecode FROM all_types WHERE owner=:1 AND type_name=:2`,
+			schema, objectName,
+		).Scan(&typecode)
+		if err != nil {
+			return "", fmt.Errorf("get type metadata failed: %w", err)
+		}
+		if typecode.String == "OBJECT" {
+			attrs, err := d.db.Query(
+				`SELECT attr_name, attr_type_name, COALESCE(TO_CHAR(length),''), COALESCE(TO_CHAR(precision),''), COALESCE(TO_CHAR(scale),'')
+				 FROM all_type_attrs WHERE owner=:1 AND type_name=:2
+				 ORDER BY attr_no`,
+				schema, objectName,
+			)
+			if err != nil {
+				return "", fmt.Errorf("get type attributes failed: %w", err)
+			}
+			defer attrs.Close()
+			var fields []string
+			for attrs.Next() {
+				var attrName, typeName, length, precision, scale sql.NullString
+				if err := attrs.Scan(&attrName, &typeName, &length, &precision, &scale); err != nil {
+					return "", fmt.Errorf("scan type attribute failed: %w", err)
+				}
+				colDef := fmt.Sprintf("%s %s", attrName.String, typeName.String)
+				if length.String != "" && length.String != "0" {
+					colDef += "(" + length.String + ")"
+				} else if precision.String != "" && precision.String != "0" {
+					if scale.String != "" && scale.String != "0" {
+						colDef += "(" + precision.String + "," + scale.String + ")"
+					} else {
+						colDef += "(" + precision.String + ")"
+					}
+				}
+				fields = append(fields, "\t"+colDef)
+			}
+			if len(fields) > 0 {
+				return fmt.Sprintf("CREATE OR REPLACE TYPE %s.%s AS OBJECT (\n%s\n);",
+					schema, objectName, strings.Join(fields, ",\n")), nil
+			}
+		}
+		definition, err := d.getSourceByType(schema, objectName, oracleType)
+		if err != nil {
+			return "", fmt.Errorf("get object definition failed: %w", err)
+		}
+		return definition, nil
+	}
+
+	if objectType == ObjectTypeTrigger {
+		body, err := d.getSourceByType(schema, objectName, oracleType)
+		if err != nil {
+			return "", fmt.Errorf("get trigger body failed: %w", err)
+		}
+		return fmt.Sprintf("CREATE OR REPLACE TRIGGER %s.%s\n%s", schema, objectName, body), nil
+	}
+
+	if objectType == ObjectTypeFunction || objectType == ObjectTypeProcedure {
+		body, err := d.getSourceByType(schema, objectName, oracleType)
+		if err != nil {
+			return "", fmt.Errorf("get object definition failed: %w", err)
+		}
+		upperBody := strings.ToUpper(strings.TrimSpace(body))
+		if !strings.HasPrefix(upperBody, "CREATE") {
+			keyword := "FUNCTION"
+			if objectType == ObjectTypeProcedure {
+				keyword = "PROCEDURE"
+			}
+			body = fmt.Sprintf("CREATE OR REPLACE %s %s.%s\n%s", keyword, schema, objectName, body)
+		}
+		return body, nil
+	}
+
 	definition, err := d.getSourceByType(schema, objectName, oracleType)
 	if err != nil {
 		return "", fmt.Errorf("get object definition failed: %w", err)
@@ -1731,65 +1885,65 @@ func (d *OracleDriver) GetObjectDetail(schema, objectType, objectName string) (m
 	switch objectType {
 	case ObjectTypeProcedure, ObjectTypeFunction, ObjectTypePackage:
 		oraType := mapOracleObjectType(objectType)
-		var status, created, altered string
+		var status, created, altered sql.NullString
 		err := d.db.QueryRow(
-			`SELECT COALESCE(status,''), TO_CHAR(created,'YYYY-MM-DD HH24:MI:SS'), TO_CHAR(last_ddl_time,'YYYY-MM-DD HH24:MI:SS')
+			`SELECT status, TO_CHAR(created,'YYYY-MM-DD HH24:MI:SS'), TO_CHAR(last_ddl_time,'YYYY-MM-DD HH24:MI:SS')
 			 FROM all_objects WHERE owner=:1 AND object_name=:2 AND object_type=:3`,
 			schema, objectName, oraType,
 		).Scan(&status, &created, &altered)
 		if err != nil {
 			return nil, err
 		}
-		detail["status"] = status
-		detail["created_at"] = created
-		detail["updated_at"] = altered
+		detail["status"] = status.String
+		detail["created_at"] = created.String
+		detail["updated_at"] = altered.String
 	case ObjectTypeSequence:
-		var minVal, maxVal, incr, cacheSize, cycleFlag, orderFlag string
+		var minVal, maxVal, incr, cacheSize, cycleFlag, orderFlag sql.NullString
 		err := d.db.QueryRow(
-			`SELECT COALESCE(TO_CHAR(min_value),''), COALESCE(TO_CHAR(max_value),''),
-				COALESCE(TO_CHAR(increment_by),''), COALESCE(TO_CHAR(cache_size),''),
-				COALESCE(cycle_flag,''), COALESCE(order_flag,'')
+			`SELECT TO_CHAR(min_value), TO_CHAR(max_value),
+				TO_CHAR(increment_by), TO_CHAR(cache_size),
+				cycle_flag, order_flag
 			 FROM all_sequences WHERE sequence_owner=:1 AND sequence_name=:2`,
 			schema, objectName,
 		).Scan(&minVal, &maxVal, &incr, &cacheSize, &cycleFlag, &orderFlag)
 		if err != nil {
 			return nil, err
 		}
-		detail["min_value"] = minVal
-		detail["max_value"] = maxVal
-		detail["increment_by"] = incr
-		detail["cache_size"] = cacheSize
-		detail["cycle_flag"] = cycleFlag
-		detail["order_flag"] = orderFlag
+		detail["min_value"] = minVal.String
+		detail["max_value"] = maxVal.String
+		detail["increment_by"] = incr.String
+		detail["cache_size"] = cacheSize.String
+		detail["cycle_flag"] = cycleFlag.String
+		detail["order_flag"] = orderFlag.String
 	case ObjectTypeSynonym:
-		var tableOwner, tableName, dbLink string
+		var tableOwner, tableName, dbLink sql.NullString
 		err := d.db.QueryRow(
-			`SELECT COALESCE(table_owner,''), COALESCE(table_name,''), COALESCE(db_link,'')
+			`SELECT table_owner, table_name, db_link
 			 FROM all_synonyms WHERE owner=:1 AND synonym_name=:2`,
 			schema, objectName,
 		).Scan(&tableOwner, &tableName, &dbLink)
 		if err != nil {
 			return nil, err
 		}
-		detail["table_owner"] = tableOwner
-		detail["table_name"] = tableName
-		detail["db_link"] = dbLink
+		detail["table_owner"] = tableOwner.String
+		detail["table_name"] = tableName.String
+		detail["db_link"] = dbLink.String
 	case ObjectTypeTrigger:
-		var triggerType, triggeringEvent, tableOwner, tableName, status string
+		var triggerType, triggeringEvent, tableOwner, tableName, status sql.NullString
 		err := d.db.QueryRow(
-			`SELECT COALESCE(trigger_type,''), COALESCE(triggering_event,''),
-				COALESCE(table_owner,''), COALESCE(table_name,''), COALESCE(status,'')
+			`SELECT trigger_type, triggering_event,
+			table_owner, table_name, status
 			 FROM all_triggers WHERE owner=:1 AND trigger_name=:2`,
 			schema, objectName,
 		).Scan(&triggerType, &triggeringEvent, &tableOwner, &tableName, &status)
 		if err != nil {
 			return nil, err
 		}
-		detail["trigger_type"] = triggerType
-		detail["triggering_event"] = triggeringEvent
-		detail["table_owner"] = tableOwner
-		detail["table_name"] = tableName
-		detail["status"] = status
+		detail["trigger_type"] = triggerType.String
+		detail["triggering_event"] = triggeringEvent.String
+		detail["table_owner"] = tableOwner.String
+		detail["table_name"] = tableName.String
+		detail["status"] = status.String
 	default:
 		return detail, nil
 	}
@@ -1831,7 +1985,14 @@ func (d *OracleDriver) CheckDependencies(schema, objectType, objectName string) 
 }
 
 func (d *OracleDriver) ExecuteObjectDDL(schema, objectType, ddl string) (string, error) {
-	_, err := d.db.Exec(ddl)
+	cleaned := strings.TrimSpace(ddl)
+	upper := strings.ToUpper(cleaned)
+	isPLSQLBlock := (strings.HasPrefix(upper, "BEGIN") || strings.HasPrefix(upper, "DECLARE")) &&
+		strings.HasSuffix(upper, "END;")
+	if !isPLSQLBlock {
+		cleaned = strings.TrimRight(cleaned, ";")
+	}
+	_, err := d.db.Exec(cleaned)
 	if err != nil {
 		return "", fmt.Errorf("Oracle DDL execution failed: %w", err)
 	}
@@ -1925,6 +2086,13 @@ func (d *OracleDriver) GenerateAlterDDL(schema, objectType, name, newDef string)
 			return []string{spec, body}, nil
 		}
 		return []string{newDef}, nil
+	}
+	if objectType == ObjectTypeSequence {
+		qualified := strings.ToUpper(schema) + "." + strings.ToUpper(name)
+		return []string{
+			fmt.Sprintf("DROP SEQUENCE %s", qualified),
+			newDef,
+		}, nil
 	}
 	return []string{newDef}, nil
 }

@@ -945,7 +945,7 @@ const SQLEditor: React.FC = () => {
   const treeNodeMenu = (schema: string, name: string, isView: boolean) => ({
     items: [
       { key: 'structure', label: isView ? tr('query.viewDefinition') : tr('query.viewStructure') },
-      { key: 'copy-ddl', label: tr('query.copyDdl') },
+      { key: 'copy-ddl', label: tr('query.copyObjectDdl') },
       { key: 'export', label: tr('query.exportTable') },
       { type: 'divider' as const },
       { key: 'delete', label: tr('query.deleteViewOrTable', { type: isView ? tr('query.viewLabel') : tr('query.tableLabel') }), danger: true },
@@ -1888,12 +1888,12 @@ const SQLEditor: React.FC = () => {
             if (parsed.kind === 'table') return [
               { key: 'select', label: tr('query.openDataTab') },
               { key: 'structure', label: tr('query.viewStructure') },
-              { key: 'copy-ddl', label: tr('query.copyDdl') },
+              { key: 'copy-ddl', label: tr('query.copyObjectDdl') },
             ];
             if (parsed.kind === 'view') return [
               { key: 'select', label: tr('query.openDataTab') },
               { key: 'view-def', label: tr('query.viewDefinition') },
-              { key: 'copy-ddl', label: tr('query.copyDdl') },
+              { key: 'copy-ddl', label: tr('query.copyObjectDdl') },
             ];
             return [];
           })(),

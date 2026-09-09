@@ -416,7 +416,7 @@ const SchemaTree: React.FC<SchemaTreeProps> = ({
                           menu={{
                             items: [
                               { key: 'structure', label: isView ? tr('query.viewDefinition') : tr('query.viewStructure'), icon: <CodeOutlined /> },
-                              { key: 'copy-ddl', label: tr('query.copyDdl'), icon: <CopyOutlined /> },
+                              { key: 'copy-ddl', label: tr('query.copyObjectDdl'), icon: <CopyOutlined /> },
                               { key: 'export', label: tr('query.exportTable'), icon: <ExportOutlined /> },
                               { type: 'divider' as const },
                               { key: 'delete', label: isView ? tr('query.deleteView') : tr('query.deleteTable'), danger: true, icon: <DeleteOutlined /> },
@@ -686,7 +686,7 @@ const SchemaTree: React.FC<SchemaTreeProps> = ({
                     menu={{
                       items: [
                         { key: 'structure', label: isView ? tr('query.viewDefinition') : tr('query.viewStructure'), icon: <CodeOutlined /> },
-                        { key: 'copy-ddl', label: tr('query.copyDdl'), icon: <CopyOutlined /> },
+                        { key: 'copy-ddl', label: tr('query.copyObjectDdl'), icon: <CopyOutlined /> },
                         { key: 'export', label: tr('query.exportTable'), icon: <ExportOutlined /> },
                         { type: 'divider' as const },
                         { key: 'delete', label: isView ? tr('query.deleteView') : tr('query.deleteTable'), danger: true, icon: <DeleteOutlined /> },

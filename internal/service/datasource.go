@@ -1135,6 +1135,11 @@ func (s *DataSourceService) DropObjectForDB(id, schema, objectType, name string,
 
 // RefreshMatViewForDB refreshes a materialized view with the specified mode
 func (s *DataSourceService) RefreshMatViewForDB(id, schema, name, mode, database string) error {
+	var ds repository.DataSource
+	if err := s.db.Where("id = ?", id).First(&ds).Error; err != nil {
+		return fmt.Errorf("data source not found")
+	}
+
 	var driver drivers.DatabaseDriver
 	var err error
 
@@ -1148,22 +1153,35 @@ func (s *DataSourceService) RefreshMatViewForDB(id, schema, name, mode, database
 	}
 	defer driver.Close()
 
-	// Build the REFRESH SQL based on mode
 	var sql string
-	qualified := fmt.Sprintf(`"%s"."%s"`, schema, name)
-	switch mode {
-	case "normal":
-		sql = fmt.Sprintf("REFRESH MATERIALIZED VIEW %s", qualified)
-	case "concurrently":
-		sql = fmt.Sprintf("REFRESH MATERIALIZED VIEW CONCURRENTLY %s", qualified)
-	case "with-no-data":
-		sql = fmt.Sprintf("REFRESH MATERIALIZED VIEW %s WITH NO DATA", qualified)
-	default:
-		return fmt.Errorf("invalid refresh mode: %s", mode)
+	if ds.Type == "oracle" {
+		// Oracle uses DBMS_MVIEW.REFRESH
+		qualified := fmt.Sprintf("%s.%s", strings.ToUpper(schema), strings.ToUpper(name))
+		switch mode {
+		case "normal", "concurrently":
+			sql = fmt.Sprintf("BEGIN DBMS_MVIEW.REFRESH('%s'); END;", qualified)
+		case "with-no-data":
+			sql = fmt.Sprintf("ALTER MATERIALIZED VIEW %s REFRESH COMPLETE ON DEMAND", qualified)
+		default:
+			return fmt.Errorf("invalid refresh mode: %s", mode)
+		}
+	} else {
+		// PostgreSQL and others use standard REFRESH MATERIALIZED VIEW
+		qualified := fmt.Sprintf(`"%s"."%s"`, schema, name)
+		switch mode {
+		case "normal":
+			sql = fmt.Sprintf("REFRESH MATERIALIZED VIEW %s", qualified)
+		case "concurrently":
+			sql = fmt.Sprintf("REFRESH MATERIALIZED VIEW CONCURRENTLY %s", qualified)
+		case "with-no-data":
+			sql = fmt.Sprintf("REFRESH MATERIALIZED VIEW %s WITH NO DATA", qualified)
+		default:
+			return fmt.Errorf("invalid refresh mode: %s", mode)
+		}
 	}
 
 	_, err = driver.ExecuteObjectDDL(schema, "matview", sql)
-	if err != nil && mode == "concurrently" {
+	if err != nil && mode == "concurrently" && ds.Type != "oracle" {
 		// Check if it's the "cannot refresh concurrently" error (needs unique index)
 		if strings.Contains(err.Error(), "cannot refresh") || strings.Contains(err.Error(), "55000") {
 			return fmt.Errorf("并发刷新失败：物化视图上必须存在至少一个唯一索引（UNIQUE INDEX）。请先创建唯一索引，或使用普通刷新模式")
