@@ -29,6 +29,7 @@ import {
   SwapOutlined,
 } from '@ant-design/icons';
 import { authAPI } from '../api';
+import logoSvg from '../assets/logo.svg';
 
 const MainLayout: React.FC = () => {
   const [collapsed, setCollapsed] = useState(false);
@@ -149,7 +150,7 @@ const MainLayout: React.FC = () => {
             whiteSpace: 'nowrap',
           }}
         >
-          <img src="/static/logo.svg" alt="logo" style={{ height: 32, width: 32, flexShrink: 0 }} />
+          <img src={logoSvg} alt="logo" style={{ height: 32, width: 32, flexShrink: 0 }} />
           {!collapsed && <span>DBridge</span>}
         </div>
         <Menu
