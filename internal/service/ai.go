@@ -78,9 +78,9 @@ func (s *AIService) IsConfigured() bool {
 func (s *AIService) GetConfig() map[string]string {
 	apiKey, baseURL, model, _, _ := s.resolveConfig()
 	return map[string]string{
-		"ai_api_key": apiKey,
+		"ai_api_key":  apiKey,
 		"ai_base_url": baseURL,
-		"ai_model":   model,
+		"ai_model":    model,
 	}
 }
 
@@ -260,6 +260,9 @@ func (s *AIService) buildSchemaContext(dataSourceID, schema string) (string, err
 			}
 			tables = append(tables, t)
 		}
+		if rows.Err() != nil {
+			return "", fmt.Errorf("row iteration failed: %w", rows.Err())
+		}
 	case "postgres":
 		schemaName := "public"
 		if schema != "" {
@@ -276,6 +279,9 @@ func (s *AIService) buildSchemaContext(dataSourceID, schema string) (string, err
 				continue
 			}
 			tables = append(tables, t)
+		}
+		if rows.Err() != nil {
+			return "", fmt.Errorf("row iteration failed: %w", rows.Err())
 		}
 	}
 
@@ -342,7 +348,11 @@ func (s *AIService) appendMySQLTableSchema(sb *strings.Builder, conn *sql.DB, ta
 		}
 		sb.WriteString(line)
 	}
+
 	sb.WriteString("\n);\n")
+	if rows.Err() != nil {
+		logger.Error("row iteration failed for table")
+	}
 }
 
 func (s *AIService) appendPGTableSchema(sb *strings.Builder, conn *sql.DB, table, schema string) {
@@ -359,6 +369,7 @@ func (s *AIService) appendPGTableSchema(sb *strings.Builder, conn *sql.DB, table
 	sb.WriteString(fmt.Sprintf("\n-- %s\nCREATE TABLE %s (\n", table, table))
 	first := true
 	for rows.Next() {
+
 		var name, dataType, nullable string
 		var defaultVal *string
 		if err := rows.Scan(&name, &dataType, &nullable, &defaultVal); err != nil {
@@ -378,29 +389,10 @@ func (s *AIService) appendPGTableSchema(sb *strings.Builder, conn *sql.DB, table
 		sb.WriteString(line)
 	}
 	sb.WriteString("\n);\n")
-}
-
-func (s *AIService) buildText2SQLPrompt(schemaCtx string, dbType string) string {
-	var sb strings.Builder
-	sb.WriteString("你是一个专业的数据库查询助手。根据用户的自然语言描述，生成正确的 SQL 查询语句。\n\n")
-	sb.WriteString(fmt.Sprintf("当前数据库类型: %s\n\n", dbType))
-	sb.WriteString("规则：\n")
-	sb.WriteString("1. 只生成 SELECT 查询语句\n")
-	if dbType == "oracle" {
-		sb.WriteString("2. Oracle 不支持 LIMIT，请使用 ROWNUM 或 OFFSET...FETCH NEXT 限制结果集\n")
-	} else if dbType == "sqlserver" {
-		sb.WriteString("2. 使用 TOP 或 OFFSET...FETCH NEXT 限制结果集\n")
-	} else {
-		sb.WriteString("2. 使用 LIMIT 限制结果集\n")
+	if rows.Err() != nil {
+		logger.Error("row iteration failed for table")
+		return
 	}
-	sb.WriteString("3. 使用中文解释 SQL 的逻辑\n")
-	sb.WriteString("4. 如果无法理解需求，请要求用户澄清\n")
-	sb.WriteString("5. SQL 语句用 ```sql ``` 代码块包裹\n\n")
-	if schemaCtx != "" {
-		sb.WriteString("以下是数据库的 Schema 信息：\n\n")
-		sb.WriteString(schemaCtx)
-	}
-	return sb.String()
 }
 
 func (s *AIService) resolveConfig() (apiKey, baseURL, model string, maxTokens int, temperature float64) {
@@ -606,6 +598,7 @@ func extractSQL(content string) string {
 	}
 	return ""
 }
+
 // ChatCompletionWithAgent runs a simple completion using an agent's config
 func (s *AIService) ChatCompletionWithAgent(agent repository.Agent, userPrompt string) (string, error) {
 	model := agent.Model
@@ -686,4 +679,3 @@ func (s *AIService) ChatCompletionWithAgent(agent repository.Agent, userPrompt s
 	}
 	return result.Choices[0].Message.Content, nil
 }
-

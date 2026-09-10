@@ -237,7 +237,9 @@ func (h *QueryHandler) ExecuteTCL(c *gin.Context) { h.executeTyped(c, "tcl") }
 
 func (h *QueryHandler) logQuery(c *gin.Context, req service.QueryInput, duration int64, success bool, errMsg string) {
 	result := service.ResultSuccess
-	if !success { result = service.ResultFailure }
+	if !success {
+		result = service.ResultFailure
+	}
 	service.QuickAudit(repository.GetDB(),
 		c.GetString("user_id"), c.GetString("tenant_id"),
 		service.ModuleQuery, "query_execute", req.DataSourceID,
@@ -353,12 +355,12 @@ func NewCompareHandler(cfg *config.Config, logger *zap.Logger) *CompareHandler {
 
 func (h *CompareHandler) CompareStructure(c *gin.Context) {
 	var req struct {
-		SourceDS        string `json:"source_ds" binding:"required"`
-		SourceSchema    string `json:"source_schema"`
-		SourceDatabase  string `json:"source_database"`
-		TargetDS        string `json:"target_ds" binding:"required"`
-		TargetSchema    string `json:"target_schema"`
-		TargetDatabase  string `json:"target_database"`
+		SourceDS       string `json:"source_ds" binding:"required"`
+		SourceSchema   string `json:"source_schema"`
+		SourceDatabase string `json:"source_database"`
+		TargetDS       string `json:"target_ds" binding:"required"`
+		TargetSchema   string `json:"target_schema"`
+		TargetDatabase string `json:"target_database"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error()))
@@ -579,19 +581,27 @@ func (h *AuditLogHandler) List(c *gin.Context) {
 	if len(userIDs) > 0 {
 		var users []repository.User
 		db.Where("id IN ?", userIDs).Find(&users)
-		for _, u := range users { userNameMap[u.ID] = u.Username }
+		for _, u := range users {
+			userNameMap[u.ID] = u.Username
+		}
 	}
 	if len(targetIDs) > 0 {
 		// Try data_sources first (most common target)
 		type dsRow struct{ ID, Name string }
 		var dss []dsRow
 		db.Table("data_sources").Where("id IN ?", targetIDs).Select("id, name").Scan(&dss)
-		for _, d := range dss { targetNameMap[d.ID] = d.Name }
+		for _, d := range dss {
+			targetNameMap[d.ID] = d.Name
+		}
 		// Also try reports
 		type rpRow struct{ ID, Name string }
 		var rps []rpRow
 		db.Table("reports").Where("id IN ?", targetIDs).Select("id, name").Scan(&rps)
-		for _, r := range rps { if targetNameMap[r.ID] == "" { targetNameMap[r.ID] = r.Name } }
+		for _, r := range rps {
+			if targetNameMap[r.ID] == "" {
+				targetNameMap[r.ID] = r.Name
+			}
+		}
 	}
 
 	// Enrich with username and target name
@@ -612,9 +622,9 @@ func (h *AuditLogHandler) List(c *gin.Context) {
 }
 
 type SettingsHandler struct {
-	svc      *service.SettingsService
-	cfg      *config.Config
-	logger   *zap.Logger
+	svc    *service.SettingsService
+	cfg    *config.Config
+	logger *zap.Logger
 }
 
 func NewSettingsHandler(cfg *config.Config, logger *zap.Logger) *SettingsHandler {
@@ -624,7 +634,6 @@ func NewSettingsHandler(cfg *config.Config, logger *zap.Logger) *SettingsHandler
 		logger: logger,
 	}
 }
-
 
 func (h *SettingsHandler) Get(c *gin.Context) {
 	// Load memory metrics
@@ -651,22 +660,3 @@ func (h *SettingsHandler) Update(c *gin.Context) {
 	// Community edition: no user-updatable settings (AI config is Pro-only)
 	c.JSON(http.StatusOK, model.SuccessResponse(gin.H{"saved": true}))
 }
-
-func maskSecret(s string) string {
-	if len(s) <= 6 {
-		return ""
-	}
-	return s[:3] + "****" + s[len(s)-3:]
-}
-
-func isMasked(s string) bool {
-	return len(s) >= 7 && s[3:7] == "****"
-}
-
-func stringValue(v interface{}) string {
-	if s, ok := v.(string); ok {
-		return s
-	}
-	return ""
-}
-

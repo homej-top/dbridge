@@ -7,7 +7,7 @@ import (
 
 func TestSplitSQL_Basic(t *testing.T) {
 	sql := "CREATE TABLE users (id INT);\nINSERT INTO users VALUES (1);\nSELECT * FROM users;"
-	stmts, err := SplitSQL(sql)
+	stmts, err := SplitSQL(sql, "mysql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +27,7 @@ BEGIN
 END;
 SELECT * FROM t;
 `
-	stmts, err := SplitSQL(sql)
+	stmts, err := SplitSQL(sql, "mysql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ BEGIN
 END;
 SELECT COUNT(*) FROM users;
 `
-	stmts, err := SplitSQL(sql)
+	stmts, err := SplitSQL(sql, "mysql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ SELECT COUNT(*) FROM users;
 
 func TestSplitSQL_SemicolonInString(t *testing.T) {
 	sql := "INSERT INTO t VALUES ('a;b;c');\nINSERT INTO t VALUES ('hello');"
-	stmts, err := SplitSQL(sql)
+	stmts, err := SplitSQL(sql, "mysql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ BEGIN
     INSERT INTO t3 VALUES (3);
 END;
 `
-	stmts, err := SplitSQL(sql)
+	stmts, err := SplitSQL(sql, "mysql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ END$$
 DELIMITER ;
 SELECT 3;
 `
-	stmts, err := SplitSQL(sql)
+	stmts, err := SplitSQL(sql, "mysql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ BEGIN
 END;
 SELECT add_one(5);
 `
-	stmts, err := SplitSQL(sql)
+	stmts, err := SplitSQL(sql, "mysql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ WITH cte AS (SELECT * FROM users WHERE active = 1)
 SELECT * FROM cte;
 INSERT INTO log VALUES (1);
 `
-	stmts, err := SplitSQL(sql)
+	stmts, err := SplitSQL(sql, "mysql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ CREATE TABLE t1 (id INT);
 -- single line comment with ; semicolon
 SELECT * FROM t1;
 `
-	stmts, err := SplitSQL(sql)
+	stmts, err := SplitSQL(sql, "mysql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ SELECT * FROM t1;
 
 func TestSplitSQL_DDL_DML_Classification(t *testing.T) {
 	sql := "CREATE TABLE t1 (id INT);\nINSERT INTO t1 VALUES (1);\nDROP TABLE old;"
-	result, err := SplitSQLDetailed(sql)
+	result, err := SplitSQLDetailed(sql, "mysql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +198,7 @@ func TestSplitSQL_SafetyCheck(t *testing.T) {
 
 func TestSplitSQL_GoSQLX_Degraded(t *testing.T) {
 	// Valid SQL should NOT be degraded
-	result, err := SplitSQLDetailed("CREATE TABLE t (id INT);")
+	result, err := SplitSQLDetailed("CREATE TABLE t (id INT);", "mysql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +217,7 @@ func TestSplitSQL_GoSQLX_Degraded(t *testing.T) {
 func TestSplitStream_Basic(t *testing.T) {
 	sql := "CREATE TABLE t (id INT);\nINSERT INTO t VALUES (1);\n"
 	var stmts []string
-	err := SplitStream(strings.NewReader(sql), func(stmt string) error {
+	err := SplitStream(strings.NewReader(sql), "mysql", func(stmt string) error {
 		stmts = append(stmts, stmt)
 		return nil
 	})
@@ -248,7 +248,7 @@ func TestDialectFromDBType(t *testing.T) {
 }
 
 func TestSplitSQL_Empty(t *testing.T) {
-	stmts, err := SplitSQL("")
+	stmts, err := SplitSQL("", "mysql")
 	if err != nil {
 		t.Fatal(err)
 	}

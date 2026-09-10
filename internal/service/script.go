@@ -147,10 +147,6 @@ type MoveNodeInput struct {
 	ParentID *string `json:"parent_id"`
 }
 
-func esc(s string) string {
-	return strings.ReplaceAll(s, "'", "''")
-}
-
 func scanScript(row map[string]interface{}) *Script {
 	s := &Script{}
 	if v, ok := row["id"]; ok {

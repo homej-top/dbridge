@@ -96,11 +96,6 @@ func (s *CompareService) connectDriver(dsID string) (drivers.DatabaseDriver, err
 	return ConnectDriver(context.Background(), ds, pwd, "")
 }
 
-// listObjects returns a map of object name → type ("table" or "view") using the driver's ListObjects.
-func (s *CompareService) listObjects(dsID, schema string) (map[string]string, error) {
-	return s.listObjectsWithDB(dsID, schema, "")
-}
-
 // listObjectsWithDB is like listObjects but allows overriding the database (for PG/SQL Server).
 func (s *CompareService) listObjectsWithDB(dsID, schema, database string) (map[string]string, error) {
 	driver, err := s.connectDriverWithDB(dsID, database)
@@ -290,6 +285,9 @@ func (s *CompareService) GetTableData(dsID, schemaName, tableName string, page, 
 			}
 		}
 		resultRows = append(resultRows, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("row iteration failed: %w", err)
 	}
 	if resultRows == nil {
 		resultRows = make([][]interface{}, 0)
@@ -1000,29 +998,6 @@ func (s *CompareService) resolveSyncColumns(sourceCols, targetCols []string, opt
 		result = make([]string, 0)
 	}
 	return result
-}
-
-func (s *CompareService) syncDataFull(sourceConn *sql.DB, sourceType, sourceTable string, targetConn *sql.DB, targetType, targetTable string, syncCols []string, opts DataSyncOptions) (*DataSyncResult, error) {
-	colList := s.buildColumnList(sourceType, syncCols)
-	selectSQL := fmt.Sprintf("SELECT %s FROM %s", colList, sourceTable)
-
-	rows, err := sourceConn.Query(selectSQL)
-	if err != nil {
-		return nil, fmt.Errorf("read source data failed: %w", err)
-	}
-	defer rows.Close()
-
-	_, srcData, err := drivers.ScanQueryResult(rows)
-	if err != nil {
-		return nil, fmt.Errorf("scan source rows failed: %w", err)
-	}
-	allRows := srcData
-
-	if len(allRows) == 0 {
-		return &DataSyncResult{Success: true, TotalRows: 0, SyncedRows: 0, SkippedRows: 0, Errors: []string{}}, nil
-	}
-
-	return s.batchInsert(targetConn, targetType, targetTable, syncCols, allRows)
 }
 
 func (s *CompareService) syncDataSelected(targetConn *sql.DB, targetType, targetTable string, syncCols []string, opts DataSyncOptions) (*DataSyncResult, error) {

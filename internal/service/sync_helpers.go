@@ -32,31 +32,6 @@ func quoteColName(dbType, col string) string {
 	}
 }
 
-func quoteTableName(dbType, schema, table string) string {
-	switch dbType {
-	case "mysql":
-		if schema != "" {
-			return fmt.Sprintf("`%s`.`%s`", schema, table)
-		}
-		return fmt.Sprintf("`%s`", table)
-	case "postgres", "oracle":
-		if schema != "" {
-			return fmt.Sprintf(`"%s"."%s"`, schema, table)
-		}
-		return fmt.Sprintf(`"%s"`, table)
-	case "sqlserver":
-		if schema != "" {
-			return fmt.Sprintf("[%s].[%s]", schema, table)
-		}
-		return fmt.Sprintf("[%s]", table)
-	default:
-		if schema != "" {
-			return schema + "." + table
-		}
-		return table
-	}
-}
-
 // ─── Batch Insert ──────────────────────────────────────────────────────────
 
 func batchInsert(ctx context.Context, db *sql.DB, dbType, table string, cols []string, rows [][]interface{}) (*DataSyncResult, error) {
@@ -170,7 +145,8 @@ func buildMSSQLPlaceholders(nCols, offset int) string {
 
 // buildOracleInsertAll builds an INSERT ALL statement for Oracle multi-row insert.
 // Oracle doesn't support multi-row VALUES, so we use:
-//   INSERT ALL INTO t (c1,c2) VALUES (:1,:2) INTO t (c1,c2) VALUES (:3,:4) SELECT 1 FROM DUAL
+//
+//	INSERT ALL INTO t (c1,c2) VALUES (:1,:2) INTO t (c1,c2) VALUES (:3,:4) SELECT 1 FROM DUAL
 func buildOracleInsertAll(table, colList string, batch [][]interface{}, allCols []string) (string, []interface{}) {
 	var parts []string
 	var args []interface{}

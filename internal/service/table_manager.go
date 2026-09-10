@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -182,14 +181,6 @@ func (s *TableManagerService) GetFullStructure(dsID, schema, table, database str
 	}
 	defer driver.Close()
 	return driver.GetFullStructure(schema, table)
-}
-
-func quotePGList(names []string) []string {
-	out := make([]string, len(names))
-	for i, n := range names {
-		out[i] = quotePG(n)
-	}
-	return out
 }
 
 func pgString(s string) string {
@@ -816,223 +807,6 @@ func (s *TableManagerService) buildDropConstraintDispatch(dbType, tbl string, ch
 	return s.buildDropConstraint(dbType, tbl, ch)
 }
 
-func (s *TableManagerService) buildModifyColumn(dbType, tbl string, ch ColumnChange, cur map[string]TableColumn) ([]string, []string, []string, bool, error) {
-	if ch.Name == "" {
-		return nil, nil, nil, false, fmt.Errorf("column name required")
-	}
-	orig, exists := cur[ch.Name]
-	if !exists {
-		return nil, nil, nil, false, fmt.Errorf("column '%s' not found", ch.Name)
-	}
-
-	var stmts []string
-	var rollbacks []string
-	var warnings []string
-	highRisk := false
-
-	// Detect length shrink
-	if ch.Length != "" && orig.Length != "" && ch.Length != orig.Length {
-		origL, newL := toInt(orig.Length), toInt(ch.Length)
-		if origL > 0 && newL > 0 && newL < origL {
-			warnings = append(warnings, fmt.Sprintf("MODIFY_COLUMN %s: length shrink (%s → %s) may truncate data", ch.Name, orig.Length, ch.Length))
-			highRisk = true
-		}
-	}
-	// Detect tightening NOT NULL
-	if ch.Nullable != nil && !*ch.Nullable && orig.Nullable {
-		warnings = append(warnings, fmt.Sprintf("MODIFY_COLUMN %s: tightening NOT NULL may fail on existing NULL values", ch.Name))
-		highRisk = true
-	}
-
-	if dbType == "mysql" {
-		colDef := quoteMySQL(ch.Name) + " " + s.mysqlColumnType(ch)
-		if ch.Nullable != nil {
-			if *ch.Nullable {
-				colDef += " NULL"
-			} else {
-				colDef += " NOT NULL"
-			}
-		}
-		if ch.HasDef != nil && *ch.HasDef {
-			colDef += " DEFAULT " + formatDefault(ch.Default)
-		} else if ch.HasDef != nil && !*ch.HasDef {
-			colDef += " DEFAULT NULL"
-		}
-		if ch.Comment != "" {
-			colDef += " COMMENT " + mysqlString(ch.Comment)
-		}
-		stmts = append(stmts, fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s", tbl, colDef))
-		// Rollback: restore original definition
-		origDef := quoteMySQL(orig.Name) + " " + orig.Type
-		if !orig.Nullable {
-			origDef += " NOT NULL"
-		} else {
-			origDef += " NULL"
-		}
-		if orig.HasDef {
-			origDef += " DEFAULT " + formatDefault(orig.Default)
-		}
-		if orig.Comment != "" {
-			origDef += " COMMENT " + mysqlString(orig.Comment)
-		}
-		rollbacks = append(rollbacks, fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s", tbl, origDef))
-	} else if dbType == "oracle" {
-		// Use original type; only include length if explicitly changed to avoid ORA-01440
-		useType := orig.Type
-		if ch.Type != "" && ch.Type != orig.Type {
-			useType = ch.Type
-		}
-		colDef := quotePG(ch.Name) + " " + useType
-		// Include length if: explicitly changed, OR type requires it (VARCHAR2/NVARCHAR2/CHAR)
-		needsLen := strings.EqualFold(useType, "VARCHAR2") || strings.EqualFold(useType, "NVARCHAR2") || strings.EqualFold(useType, "CHAR") || strings.EqualFold(useType, "NCHAR")
-		if ch.Length != "" && ch.Length != "0" && ch.Length != orig.Length {
-			colDef += "(" + ch.Length + ")"
-		} else if needsLen && orig.Length != "" && orig.Length != "0" {
-			// For NVARCHAR2/NCHAR, Oracle reports byte length (x2 of char length for AL16UTF16)
-			useLen := orig.Length
-			if strings.EqualFold(useType, "NVARCHAR2") || strings.EqualFold(useType, "NCHAR") {
-				if n, err := strconv.Atoi(orig.Length); err == nil && n > 2000 {
-					useLen = strconv.Itoa(n / 2)
-				}
-			}
-			colDef += "(" + useLen + ")"
-		}
-		// Include DEFAULT (must come before NULL/NOT NULL in Oracle MODIFY parens)
-		var defaultPart string
-		if ch.HasDef != nil && *ch.HasDef {
-			defaultPart = " DEFAULT " + formatDefault(ch.Default)
-		} else if ch.HasDef != nil && !*ch.HasDef && orig.HasDef {
-			defaultPart = " DEFAULT NULL"
-		}
-		colDef += defaultPart
-		// Only include NULL/NOT NULL if nullability is actually changing
-		if ch.Nullable != nil && *ch.Nullable != orig.Nullable {
-			if *ch.Nullable {
-				colDef += " NULL"
-			} else {
-				colDef += " NOT NULL"
-			}
-		}
-		// Only emit MODIFY if something other than comment actually changed
-		typeChanged := ch.Type != "" && ch.Type != orig.Type
-		lenChanged := ch.Length != "" && ch.Length != "0" && ch.Length != orig.Length
-		nullChanged := ch.Nullable != nil && *ch.Nullable != orig.Nullable
-		defChanged := (ch.HasDef != nil && *ch.HasDef) || (ch.HasDef != nil && !*ch.HasDef && orig.HasDef)
-		if typeChanged || lenChanged || nullChanged || defChanged {
-			stmts = append(stmts, fmt.Sprintf("ALTER TABLE %s MODIFY (%s)", tbl, colDef))
-			origDef := quotePG(orig.Name) + " " + orig.Type
-			if !orig.Nullable {
-				origDef += " NOT NULL"
-			}
-			if orig.HasDef {
-				origDef += " DEFAULT " + formatDefault(orig.Default)
-			}
-			rollbacks = append(rollbacks, fmt.Sprintf("ALTER TABLE %s MODIFY (%s)", tbl, origDef))
-		}
-		// Comment change (only emit if actually changed)
-		if ch.Comment != "" && ch.Comment != orig.Comment {
-			stmts = append(stmts, fmt.Sprintf("COMMENT ON COLUMN %s.%s IS %s", tbl, quotePG(ch.Name), pgString(ch.Comment)))
-			rollbacks = append(rollbacks, fmt.Sprintf("COMMENT ON COLUMN %s.%s IS %s", tbl, quotePG(ch.Name), pgString(orig.Comment)))
-		}
-	} else if dbType == "sqlserver" {
-		// Only generate ALTER COLUMN if there are actual column definition changes
-		colModified := ch.Type != "" || ch.Length != "" || ch.Nullable != nil
-		if colModified {
-			colDef := "[" + ch.Name + "] "
-			if ch.Type != "" {
-				colDef += ch.Type
-			} else {
-				colDef += orig.Type
-			}
-			if ch.Length != "" && ch.Length != "0" {
-				colDef = "[" + ch.Name + "] " + ch.Type + "(" + ch.Length + ")"
-			}
-			if ch.Nullable != nil {
-				if *ch.Nullable {
-					colDef += " NULL"
-				} else {
-					colDef += " NOT NULL"
-				}
-			}
-			stmts = append(stmts, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s", tbl, colDef))
-			origDef := "[" + orig.Name + "] " + orig.Type
-			if !orig.Nullable {
-				origDef += " NOT NULL"
-			}
-			rollbacks = append(rollbacks, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s", tbl, origDef))
-		}
-		// Default value (SQL Server uses ADD/DROP DEFAULT as separate statements)
-		// Always drop any existing default constraint first to be safe
-		if ch.HasDef != nil && *ch.HasDef {
-			// Drop any existing default constraint
-			stmts = append(stmts, fmt.Sprintf(
-				"DECLARE @cn NVARCHAR(200); "+
-					"SELECT @cn = name FROM sys.default_constraints "+
-					"WHERE parent_object_id = OBJECT_ID('%s') AND parent_column_id = COLUMNPROPERTY(OBJECT_ID('%s'), '%s', 'ColumnId'); "+
-					"IF @cn IS NOT NULL EXEC('ALTER TABLE %s DROP CONSTRAINT ' + @cn)",
-				tbl, tbl, ch.Name, tbl))
-			stmts = append(stmts, fmt.Sprintf("ALTER TABLE %s ADD DEFAULT %s FOR [%s]", tbl, formatDefault(ch.Default), ch.Name))
-			// Rollback: drop the newly added default
-			rollbacks = append(rollbacks, fmt.Sprintf(
-				"DECLARE @cn NVARCHAR(200); "+
-					"SELECT @cn = name FROM sys.default_constraints "+
-					"WHERE parent_object_id = OBJECT_ID('%s') AND parent_column_id = COLUMNPROPERTY(OBJECT_ID('%s'), '%s', 'ColumnId'); "+
-					"EXEC('ALTER TABLE %s DROP CONSTRAINT ' + @cn)",
-				tbl, tbl, ch.Name, tbl))
-		} else if ch.HasDef != nil && !*ch.HasDef && orig.HasDef {
-			// Removing an existing default
-			stmts = append(stmts, fmt.Sprintf(
-				"DECLARE @cn NVARCHAR(200); "+
-					"SELECT @cn = name FROM sys.default_constraints "+
-					"WHERE parent_object_id = OBJECT_ID('%s') AND parent_column_id = COLUMNPROPERTY(OBJECT_ID('%s'), '%s', 'ColumnId'); "+
-					"EXEC('ALTER TABLE %s DROP CONSTRAINT ' + @cn)",
-				tbl, tbl, ch.Name, tbl))
-			// Rollback: restore original default
-			rollbacks = append(rollbacks, fmt.Sprintf("ALTER TABLE %s ADD DEFAULT %s FOR [%s]", tbl, formatDefault(orig.Default), ch.Name))
-		}
-		// Column comment via extended properties (always generate if comment changed)
-		if ch.Comment != "" {
-			stmts = append(stmts, drivers.BuildSQLServerColumnComment(tbl, ch.Name, ch.Comment))
-		}
-		if orig.Comment != "" {
-			rollbacks = append(rollbacks, drivers.BuildSQLServerColumnComment(tbl, ch.Name, orig.Comment))
-		}
-	} else {
-		// PG/Oracle/SQL Server: only generate statements for actual changes
-		newType := s.pgColumnTypeFromChange(ch)
-		origType := s.pgColumnTypeFromColumn(orig)
-		if newType != origType {
-			stmts = append(stmts, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s TYPE %s", tbl, quotePG(ch.Name), newType))
-			rollbacks = append(rollbacks, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s TYPE %s", tbl, quotePG(ch.Name), origType))
-		}
-		if ch.Nullable != nil && *ch.Nullable != orig.Nullable {
-			if *ch.Nullable {
-				stmts = append(stmts, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s DROP NOT NULL", tbl, quotePG(ch.Name)))
-				rollbacks = append(rollbacks, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s SET NOT NULL", tbl, quotePG(ch.Name)))
-			} else {
-				stmts = append(stmts, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s SET NOT NULL", tbl, quotePG(ch.Name)))
-				rollbacks = append(rollbacks, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s DROP NOT NULL", tbl, quotePG(ch.Name)))
-			}
-		}
-		if ch.HasDef != nil && *ch.HasDef {
-			stmts = append(stmts, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s SET DEFAULT %s", tbl, quotePG(ch.Name), formatDefault(ch.Default)))
-			if orig.HasDef {
-				rollbacks = append(rollbacks, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s SET DEFAULT %s", tbl, quotePG(ch.Name), formatDefault(orig.Default)))
-			} else {
-				rollbacks = append(rollbacks, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s DROP DEFAULT", tbl, quotePG(ch.Name)))
-			}
-		} else if ch.HasDef != nil && !*ch.HasDef && orig.HasDef {
-			stmts = append(stmts, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s DROP DEFAULT", tbl, quotePG(ch.Name)))
-			rollbacks = append(rollbacks, fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s SET DEFAULT %s", tbl, quotePG(ch.Name), formatDefault(orig.Default)))
-		}
-		if ch.Comment != "" {
-			stmts = append(stmts, fmt.Sprintf("COMMENT ON COLUMN %s.%s IS %s", tbl, quotePG(ch.Name), pgString(ch.Comment)))
-			rollbacks = append(rollbacks, fmt.Sprintf("COMMENT ON COLUMN %s.%s IS %s", tbl, quotePG(ch.Name), pgString(orig.Comment)))
-		}
-	}
-	return stmts, rollbacks, warnings, highRisk, nil
-}
-
 func (s *TableManagerService) pgColumnTypeFromColumn(c TableColumn) string {
 	t := strings.ToLower(c.Type)
 	switch t {
@@ -1330,9 +1104,15 @@ func (s *TableManagerService) buildAddConstraint(dbType, tbl string, ch IndexCha
 	switch typ {
 	case "PRIMARY KEY":
 		cols := strings.Join(quoteList(ch.Columns, func(n string) string {
-			if dbType == "mysql" { return quoteMySQL(n) }
-			if dbType == "sqlserver" { return "[" + strings.ReplaceAll(n, "]", "]]") + "]" }
-			if dbType == "oracle" { return quotePG(strings.ToUpper(n)) }
+			if dbType == "mysql" {
+				return quoteMySQL(n)
+			}
+			if dbType == "sqlserver" {
+				return "[" + strings.ReplaceAll(n, "]", "]]") + "]"
+			}
+			if dbType == "oracle" {
+				return quotePG(strings.ToUpper(n))
+			}
 			return quotePG(n)
 		}), ", ")
 		if dbType == "sqlserver" {
@@ -1534,12 +1314,6 @@ func isNumeric(s string) bool {
 	return true
 }
 
-func toInt(s string) int64 {
-	var v int64
-	fmt.Sscanf(s, "%d", &v)
-	return v
-}
-
 func isReservedWord(name string) bool {
 	lower := strings.ToLower(name)
 	switch lower {
@@ -1569,11 +1343,11 @@ func (s *TableManagerService) ExecuteViewDDL(dsID, schema, view, sql, database s
 	}
 
 	return map[string]interface{}{
-		"success":   true,
-		"columns":   result.Columns,
-		"rows":      result.Rows,
+		"success":    true,
+		"columns":    result.Columns,
+		"rows":       result.Rows,
 		"total_rows": result.TotalRows,
-		"duration":  result.Duration,
+		"duration":   result.Duration,
 	}, nil
 }
 
@@ -1602,8 +1376,8 @@ func (s *TableManagerService) UpdateView(dsID, schema, view, definition, databas
 	}
 
 	return map[string]interface{}{
-		"success":  true,
-		"message":  fmt.Sprintf("View '%s' updated successfully", view),
+		"success":             true,
+		"message":             fmt.Sprintf("View '%s' updated successfully", view),
 		"statements_executed": len(statements),
 	}, nil
 }

@@ -4,10 +4,8 @@ import (
 	"context"
 	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/dbridge/dbridge/internal/repository"
 	"github.com/dbridge/dbridge/internal/service/drivers"
@@ -40,15 +38,6 @@ func validateSchemaName(schema string) error {
 		return fmt.Errorf("无效的 schema 名称 (仅允许字母、数字、下划线、点): %s", schema)
 	}
 	return nil
-}
-
-// safeString converts []byte to string, replacing invalid UTF-8 sequences
-func safeString(b []byte) string {
-	s := string(b)
-	if !utf8.ValidString(s) {
-		return strings.ToValidUTF8(s, "?")
-	}
-	return s
 }
 
 type QueryService struct {
@@ -148,145 +137,6 @@ func (s *QueryService) connectDriver(ctx context.Context, dataSourceID, database
 		database = "postgres"
 	}
 	return ConnectDriver(ctx, ds, pwd, database)
-}
-
-// executePagedQuery handles SELECT queries with optional server-side pagination.
-func (s *QueryService) executePagedQuery(driver drivers.DatabaseDriver, input QueryInput, start time.Time) (*QueryOutput, error) {
-	query := strings.TrimRight(strings.TrimSpace(input.SQL), ";")
-	dbType := driver.DBType()
-
-	// If page/pagesize not specified, run directly
-	if input.Page <= 0 || input.PageSize <= 0 {
-		result, err := driver.ExecuteQuery(query, input.Schema)
-		if err != nil {
-			return nil, fmt.Errorf("query error: %w", err)
-		}
-		return &QueryOutput{
-			Columns:   result.Columns,
-			Rows:      result.Rows,
-			TotalRows: result.TotalRows,
-			Duration:  time.Since(start).Milliseconds(),
-			Mode:      "data",
-		}, nil
-	}
-
-	// COUNT(*) for total — strip ORDER BY to avoid SQL Server subquery error
-	countQuery := query
-	upperQ := strings.ToUpper(query)
-	if idx := strings.LastIndex(upperQ, "ORDER BY"); idx >= 0 {
-		// Strip ORDER BY clause (keep everything before it)
-		countQuery = strings.TrimSpace(query[:idx])
-		// Also strip trailing semicolon if present
-		countQuery = strings.TrimRight(countQuery, ";")
-	}
-	countSQL := fmt.Sprintf("SELECT COUNT(*) FROM (%s) AS cnt", countQuery)
-	if dbType == "oracle" || dbType == "sqlserver" {
-		countSQL = fmt.Sprintf("SELECT COUNT(*) FROM (%s) cnt", countQuery)
-	}
-	countResult, err := driver.ExecuteQuery(countSQL, input.Schema)
-	if err != nil {
-		return nil, fmt.Errorf("count query error: %w", err)
-	}
-	var total int64
-	if len(countResult.Rows) > 0 && len(countResult.Rows[0]) > 0 {
-		switch v := countResult.Rows[0][0].(type) {
-		case int64:
-			total = v
-		case float64:
-			total = int64(v)
-		case string:
-			total, _ = strconv.ParseInt(v, 10, 64)
-		case []byte:
-			total, _ = strconv.ParseInt(string(v), 10, 64)
-		}
-	}
-
-	// Paginated query
-	offset := (input.Page - 1) * input.PageSize
-	if dbType == "oracle" || dbType == "sqlserver" {
-		if dbType == "sqlserver" && !strings.Contains(strings.ToUpper(query), "ORDER BY") {
-			query = query + " ORDER BY (SELECT NULL)"
-		}
-		query = fmt.Sprintf("%s OFFSET %d ROWS FETCH NEXT %d ROWS ONLY", query, offset, input.PageSize)
-	} else {
-		query = fmt.Sprintf("%s LIMIT %d OFFSET %d", query, input.PageSize, offset)
-	}
-
-	result, err := driver.ExecuteQuery(query, input.Schema)
-	if err != nil {
-		return nil, fmt.Errorf("query error: %w", err)
-	}
-
-	return &QueryOutput{
-		Columns:   result.Columns,
-		Rows:      result.Rows,
-		TotalRows: total,
-		Duration:  time.Since(start).Milliseconds(),
-		Mode:      "data",
-	}, nil
-}
-
-
-const metaRowCap = 10000
-
-// executeMeta runs a metadata query (SHOW/DESCRIBE/EXPLAIN) without pagination.
-// Results are capped at metaRowCap rows to prevent excessive memory usage.
-func (s *QueryService) executeMeta(driver drivers.DatabaseDriver, input QueryInput, start time.Time) (*QueryOutput, error) {
-	result, err := driver.ExecuteQuery(input.SQL, input.Schema)
-	if err != nil {
-		return nil, fmt.Errorf("query error: %w", err)
-	}
-	truncated := false
-	rows := result.Rows
-	if len(rows) > metaRowCap {
-		rows = rows[:metaRowCap]
-		truncated = true
-	}
-	return &QueryOutput{
-		Columns:   result.Columns,
-		Rows:      rows,
-		TotalRows: int64(len(rows)),
-		Duration:  time.Since(start).Milliseconds(),
-		Mode:      "meta",
-		Truncated: truncated,
-	}, nil
-}
-
-// executeDirect runs SQL without pagination or wrapping. Used as fallback when
-// COUNT(*) wrapping fails for "data" category queries.
-func (s *QueryService) executeDirect(driver drivers.DatabaseDriver, input QueryInput, start time.Time, fallbackMode string) (*QueryOutput, error) {
-	result, err := driver.ExecuteQuery(input.SQL, input.Schema)
-	if err != nil {
-		return nil, fmt.Errorf("query error: %w", err)
-	}
-	mode := fallbackMode
-	if len(result.Columns) == 0 && result.AffectedRows > 0 {
-		mode = "message"
-	}
-	return &QueryOutput{
-		Columns:      result.Columns,
-		Rows:         result.Rows,
-		TotalRows:    result.TotalRows,
-		Duration:     time.Since(start).Milliseconds(),
-		Mode:         mode,
-		AffectedRows: result.AffectedRows,
-	}, nil
-}
-
-// executeOther runs DDL/DML statements and returns a message-mode result.
-func (s *QueryService) executeOther(driver drivers.DatabaseDriver, input QueryInput, start time.Time) (*QueryOutput, error) {
-	result, err := driver.ExecuteQuery(input.SQL, input.Schema)
-	if err != nil {
-		return nil, fmt.Errorf("exec error: %w", err)
-	}
-	return &QueryOutput{
-		Columns:      result.Columns,
-		Rows:         result.Rows,
-		TotalRows:    result.TotalRows,
-		Duration:     time.Since(start).Milliseconds(),
-		Mode:         "message",
-		AffectedRows: result.AffectedRows,
-	}, nil
 }
 
 // executeSQLServerSchemaRename renames a SQL Server schema.

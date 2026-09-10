@@ -6,12 +6,11 @@ import (
 	"fmt"
 
 	"github.com/dbridge/dbridge/internal/repository"
-	cryptoPkg "github.com/dbridge/dbridge/pkg/crypto"
 
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/lib/pq"
-	_ "github.com/sijms/go-ora/v2"
 	_ "github.com/microsoft/go-mssqldb"
+	_ "github.com/sijms/go-ora/v2"
 	_ "modernc.org/sqlite"
 )
 
@@ -96,9 +95,4 @@ func openDBConn(ds repository.DataSource, pwd string) (*sql.DB, error) {
 		return nil, fmt.Errorf("connection failed: %w", err)
 	}
 	return conn, nil
-}
-
-// decryptDS decrypts the password for a data source
-func decryptDS(ds *repository.DataSource) (string, error) {
-	return cryptoPkg.Decrypt(ds.Password)
 }

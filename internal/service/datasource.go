@@ -44,7 +44,7 @@ func systemDSFromConfig(cfg config.DatabaseConfig) (repository.DataSource, error
 	ds := repository.DataSource{
 		ID:        SystemDataSourceID,
 		Name:      "系统数据源",
-		TenantID:  "",     // 全局，对全体租户可见
+		TenantID:  "", // 全局，对全体租户可见
 		CreatedBy: "system",
 		IsSystem:  true,
 		Tags:      "system",
@@ -157,17 +157,17 @@ func isDuplicateKeyError(err error) bool {
 }
 
 type CreateDSInput struct {
-	Name              string `json:"name" binding:"required"`
-	Type              string `json:"type" binding:"required"`
-	Host              string `json:"host"`
-	Port              int    `json:"port"`
-	Database          string `json:"database"`
-	Username          string `json:"username"`
-	Password          string `json:"password"`
-	SSLMode           string `json:"ssl_mode"`
-	ExtraConfig       string `json:"extra_config"`
-	Tags              string `json:"tags"`
-	Env               string `json:"env"`
+	Name        string `json:"name" binding:"required"`
+	Type        string `json:"type" binding:"required"`
+	Host        string `json:"host"`
+	Port        int    `json:"port"`
+	Database    string `json:"database"`
+	Username    string `json:"username"`
+	Password    string `json:"password"`
+	SSLMode     string `json:"ssl_mode"`
+	ExtraConfig string `json:"extra_config"`
+	Tags        string `json:"tags"`
+	Env         string `json:"env"`
 	// Oracle-specific fields (also merged into extra_config)
 	OracleService     string `json:"oracle_service"`
 	OracleConnectMode string `json:"oracle_connect_mode"`
@@ -424,30 +424,6 @@ func (s *DataSourceService) GetDecryptedPassword(id string) (string, error) {
 	return cryptoPkg.Decrypt(ds.Password)
 }
 
-// connectDB opens and pings a connection to the given data source
-func (s *DataSourceService) connectDB(id string) (*sql.DB, *repository.DataSource, error) {
-	var ds repository.DataSource
-	if err := s.db.Where("id = ?", id).First(&ds).Error; err != nil {
-		return nil, nil, fmt.Errorf("data source not found")
-	}
-
-	pwd, err := cryptoPkg.Decrypt(ds.Password)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to decrypt password")
-	}
-
-	if !isSupportedDBType(ds.Type) {
-		return nil, nil, fmt.Errorf("unsupported database type: %s", ds.Type)
-	}
-
-	conn, err := openDBConn(ds, pwd)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return conn, &ds, nil
-}
-
 // connectDriver creates a DatabaseDriver for the given data source ID.
 // The caller is responsible for closing the driver.
 // Connect creates a driver connection for server management operations
@@ -466,16 +442,17 @@ func (s *DataSourceService) connectDriver(id string) (drivers.DatabaseDriver, *s
 	if err := s.db.Where("id = ?", id).First(&ds).Error; err != nil {
 		return nil, nil, nil, fmt.Errorf("data source not found")
 	}
-
-	pwd, err := cryptoPkg.Decrypt(ds.Password)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to decrypt password")
-	}
-
 	if !isSupportedDBType(ds.Type) {
 		return nil, nil, nil, fmt.Errorf("unsupported database type: %s", ds.Type)
 	}
-
+	var pwd string
+	if ds.Password != "" {
+		var err error
+		pwd, err = cryptoPkg.Decrypt(ds.Password)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to decrypt password")
+		}
+	}
 	driver, db, err := s.buildDriver(ds, pwd)
 	if err != nil {
 		return nil, nil, nil, err
@@ -957,7 +934,7 @@ func (s *DataSourceService) GetSupportedObjectTypes(id string) ([]string, error)
 func (s *DataSourceService) ListObjectsByType(id, schema, objectType string, opts drivers.ListOptions) (*drivers.ListResult, error) {
 	var driver drivers.DatabaseDriver
 	var err error
-	
+
 	// If database is specified, connect to that specific database
 	if opts.Database != "" {
 		driver, _, err = s.connectDriverForDB(id, opts.Database)
@@ -977,7 +954,7 @@ func (s *DataSourceService) ListObjectsByType(id, schema, objectType string, opt
 		_ = db
 		_ = ds
 	}
-	
+
 	return driver.ListObjectsByType(schema, objectType, opts)
 }
 
@@ -988,7 +965,7 @@ func (s *DataSourceService) GetObjectDetail(id, schema, objectType, objectName s
 func (s *DataSourceService) GetObjectDetailForDB(id, schema, objectType, objectName, database string) (map[string]interface{}, error) {
 	var driver drivers.DatabaseDriver
 	var err error
-	
+
 	if database != "" {
 		driver, _, err = s.connectDriverForDB(id, database)
 	} else {
@@ -1019,7 +996,7 @@ func (s *DataSourceService) CreateObject(id, schema, objectType, ddl string) (st
 func (s *DataSourceService) CreateObjectForDB(id, schema, objectType, ddl, database string) (string, error) {
 	var driver drivers.DatabaseDriver
 	var err error
-	
+
 	if database != "" {
 		driver, _, err = s.connectDriverForDB(id, database)
 	} else {
@@ -1029,7 +1006,7 @@ func (s *DataSourceService) CreateObjectForDB(id, schema, objectType, ddl, datab
 		return "", err
 	}
 	defer driver.Close()
-	
+
 	return driver.ExecuteObjectDDL(schema, objectType, ddl)
 }
 
@@ -1042,7 +1019,7 @@ func (s *DataSourceService) AlterObjectForDB(id, schema, objectType, name, defin
 	var db *sql.DB
 	var ds *repository.DataSource
 	var err error
-	
+
 	if database != "" {
 		driver, db, err = s.connectDriverForDB(id, database)
 		if err != nil {
@@ -1104,7 +1081,7 @@ func (s *DataSourceService) DropObject(id, schema, objectType, name string, forc
 func (s *DataSourceService) DropObjectForDB(id, schema, objectType, name string, force bool, database string) error {
 	var driver drivers.DatabaseDriver
 	var err error
-	
+
 	if database != "" {
 		driver, _, err = s.connectDriverForDB(id, database)
 	} else {
@@ -1216,5 +1193,3 @@ type DependencyWarning struct {
 func (e *DependencyWarning) Error() string {
 	return fmt.Sprintf("object has %d dependencies", len(e.Dependencies))
 }
-
-
