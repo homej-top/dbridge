@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Modal, Select, Button, Spin, message, Space, Alert, Upload, List, Typography,
 } from 'antd';
@@ -17,6 +18,7 @@ interface Props {
 }
 
 const ImportModal: React.FC<Props> = ({ open, onClose }) => {
+  const { t } = useTranslation('importModal');
   const [dataSources, setDataSources] = useState<DataSource[]>([]);
   const [targetDS, setTargetDS] = useState<string>('');
   const [sql, setSql] = useState('');
@@ -48,7 +50,7 @@ const ImportModal: React.FC<Props> = ({ open, onClose }) => {
       const text = e.target?.result;
       if (typeof text === 'string') {
         setSql(text);
-        message.success(`已加载文件: ${file.name}`);
+        message.success(t('fileLoaded', { fileName: file.name }));
       }
     };
     reader.readAsText(file);
@@ -57,25 +59,25 @@ const ImportModal: React.FC<Props> = ({ open, onClose }) => {
 
   const handleExecute = async () => {
     if (!targetDS) {
-      message.warning('请选择目标数据源');
+      message.warning(t('selectTargetDatasource'));
       return;
     }
     if (!sql.trim()) {
-      message.warning('请输入 SQL 内容');
+      message.warning(t('enterSqlContent'));
       return;
     }
 
     Modal.confirm({
-      title: '确认执行导入',
+      title: t('confirmExecuteImport'),
       content: (
         <div>
-          <p>将在目标数据库上执行 SQL，此操作可能修改数据库结构和数据。</p>
-          <p style={{ color: '#e74c3c', fontWeight: 500 }}>请确保已备份目标数据库！</p>
+          <p>{t('willExecuteOnTarget')}</p>
+          <p style={{ color: '#e74c3c', fontWeight: 500 }}>{t('ensureBackup')}</p>
         </div>
       ),
-      okText: '确认执行',
+      okText: t('confirmExecute'),
       okButtonProps: { danger: true },
-      cancelText: '取消',
+      cancelText: t('cancel'),
       onOk: async () => {
         setExecuting(true);
         setResult(null);
@@ -88,9 +90,9 @@ const ImportModal: React.FC<Props> = ({ open, onClose }) => {
             errors: d?.errors || [],
           });
           if ((d?.errors || []).length === 0) {
-            message.success(`导入成功: 执行了 ${d?.executed_count} 条语句`);
+            message.success(t('importSuccess', { count: d?.executed_count }));
           } else {
-            message.warning(`导入部分完成: ${d?.executed_count} 条成功, ${d?.errors.length} 条失败`);
+            message.warning(t('importPartial', { executed: d?.executed_count, failed: d?.errors.length }));
           }
         } catch { /* handled */ }
         finally { setExecuting(false); }
@@ -100,13 +102,13 @@ const ImportModal: React.FC<Props> = ({ open, onClose }) => {
 
   return (
     <Modal
-      title="导入 SQL"
+      title={t('importSQL')}
       open={open}
       onCancel={onClose}
       width={800}
       footer={
         <Space>
-          <Button onClick={onClose}>关闭</Button>
+          <Button onClick={onClose}>{t('close')}</Button>
           <Button
             type="primary"
             danger
@@ -115,7 +117,7 @@ const ImportModal: React.FC<Props> = ({ open, onClose }) => {
             disabled={!sql.trim() || !targetDS}
             onClick={handleExecute}
           >
-            执行导入
+            {t('executeImport')}
           </Button>
         </Space>
       }
@@ -123,11 +125,11 @@ const ImportModal: React.FC<Props> = ({ open, onClose }) => {
     >
       <Spin spinning={loading || executing}>
         <div style={{ marginBottom: 12 }}>
-          <div style={{ marginBottom: 8, fontWeight: 500 }}>目标数据源</div>
+          <div style={{ marginBottom: 8, fontWeight: 500 }}>{t('targetDatasource')}</div>
           <Select
             value={targetDS || undefined}
             onChange={setTargetDS}
-            placeholder="选择目标数据源"
+            placeholder={t('selectTargetDatasource')}
             style={{ width: '100%' }}
             options={dataSources.map(ds => ({
               label: `${ds.name} (${ds.type} - ${ds.host}:${ds.port})`,
@@ -137,13 +139,13 @@ const ImportModal: React.FC<Props> = ({ open, onClose }) => {
         </div>
 
         <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ fontWeight: 500 }}>SQL 内容</span>
+          <span style={{ fontWeight: 500 }}>{t('sqlContent')}</span>
           <Upload
             accept=".sql,.txt"
             showUploadList={false}
             beforeUpload={handleUpload}
           >
-            <Button size="small" icon={<UploadOutlined />}>上传 .sql 文件</Button>
+            <Button size="small" icon={<UploadOutlined />}>{t('uploadSqlFile')}</Button>
           </Upload>
         </div>
         <div style={{ border: '1px solid #d9d9d9', borderRadius: 4, marginBottom: 12 }}>
@@ -166,14 +168,14 @@ const ImportModal: React.FC<Props> = ({ open, onClose }) => {
             {result.errors.length === 0 ? (
               <Alert
                 type="success"
-                message={`成功执行 ${result.executed_count} 条语句`}
+                message={t('successExecuted', { count: result.executed_count })}
                 showIcon
                 style={{ marginBottom: 8 }}
               />
             ) : (
               <Alert
                 type="warning"
-                message={`${result.executed_count} 条成功, ${result.errors.length} 条失败`}
+                message={t('successFailed', { success: result.executed_count, failed: result.errors.length })}
                 showIcon
                 style={{ marginBottom: 8 }}
               />
@@ -181,7 +183,7 @@ const ImportModal: React.FC<Props> = ({ open, onClose }) => {
 
             {result.executed.length > 0 && (
               <div style={{ marginBottom: 8 }}>
-                <Text strong>已执行:</Text>
+                <Text strong>{t('executed')}:</Text>
                 <List
                   size="small"
                   dataSource={result.executed.slice(0, 20)}
@@ -192,14 +194,14 @@ const ImportModal: React.FC<Props> = ({ open, onClose }) => {
                   )}
                 />
                 {result.executed.length > 20 && (
-                  <Text type="secondary">... 还有 {result.executed.length - 20} 条</Text>
+                  <Text type="secondary">{t('remaining', { count: result.executed.length - 20 })}</Text>
                 )}
               </div>
             )}
 
             {result.errors.length > 0 && (
               <div>
-                <Text strong type="danger">错误:</Text>
+                <Text strong type="danger">{t('errors')}:</Text>
                 <List
                   size="small"
                   dataSource={result.errors}

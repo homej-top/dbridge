@@ -60,13 +60,14 @@ func NewQueryService(db *gorm.DB) *QueryService {
 }
 
 type QueryInput struct {
-	DataSourceID     string `json:"data_source_id" binding:"required"`
-	SQL              string `json:"sql" binding:"required"`
-	Schema           string `json:"schema"`
-	Database         string `json:"database"`
-	Page             int    `json:"page"`
-	PageSize         int    `json:"page_size"`
-	Category         string `json:"category"` // "data" | "meta" | "other" — classified by frontend
+	DataSourceID       string `json:"data_source_id" binding:"required"`
+	SQL                string `json:"sql" binding:"required"`
+	Schema             string `json:"schema"`
+	Database           string `json:"database"`
+	Page               int    `json:"page"`
+	PageSize           int    `json:"page_size"`
+	Category           string `json:"category"` // "data" | "meta" | "other" — classified by frontend
+	SubscriptionStatus string `json:"-"`        // subscription status from middleware
 }
 
 type QueryOutput struct {

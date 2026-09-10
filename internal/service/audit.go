@@ -45,18 +45,19 @@ const (
 // ─── Audit Details ─────────────────────────────────────────────────────────
 
 type AuditDetails struct {
-	SQL          string `json:"sql,omitempty"`
-	Target       string `json:"target,omitempty"`
-	DsType       string `json:"ds_type,omitempty"`
-	Source       string `json:"source,omitempty"`
-	AgentID      string `json:"agent_id,omitempty"`
-	SkillID      string `json:"skill_id,omitempty"`
-	SkillSlug    string `json:"skill_slug,omitempty"`
-	SkillName    string `json:"skill_name,omitempty"`
-	SkillVersion int    `json:"skill_version,omitempty"`
-	Duration     int64  `json:"duration_ms,omitempty"`
-	Error        string `json:"error,omitempty"`
-	RowsAffected int64  `json:"rows_affected,omitempty"`
+	SQL          string                 `json:"sql,omitempty"`
+	Target       string                 `json:"target,omitempty"`
+	DsType       string                 `json:"ds_type,omitempty"`
+	Source       string                 `json:"source,omitempty"`
+	AgentID      string                 `json:"agent_id,omitempty"`
+	SkillID      string                 `json:"skill_id,omitempty"`
+	SkillSlug    string                 `json:"skill_slug,omitempty"`
+	SkillName    string                 `json:"skill_name,omitempty"`
+	SkillVersion int                    `json:"skill_version,omitempty"`
+	Duration     int64                  `json:"duration_ms,omitempty"`
+	Error        string                 `json:"error,omitempty"`
+	RowsAffected int64                  `json:"rows_affected,omitempty"`
+	Extra        map[string]interface{} `json:"extra,omitempty"`
 }
 
 // ─── Service ────────────────────────────────────────────────────────────────

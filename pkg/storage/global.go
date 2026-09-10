@@ -13,6 +13,7 @@ import (
 )
 
 var globalManager *ProfileManager
+var globalBindingResolver *BindingResolver
 
 // InitFromDB 从数据库加载所有启用的存储实例。
 // 若数据库为空，则种子一个默认的本地存储实例。
@@ -20,10 +21,6 @@ func InitFromDB(db *gorm.DB) error {
 	manager := NewProfileManager()
 
 	if db != nil {
-		if err := db.AutoMigrate(&StorageInstanceRecord{}); err != nil {
-			return fmt.Errorf("storage: migrate table: %w", err)
-		}
-
 		// 种子默认 local 实例（若表为空，仅写 DB，内存注册由加载循环完成）
 		if err := ensureDefaultLocalStorage(db); err != nil {
 			log.Printf("storage: seed default local storage: %v", err)
@@ -63,6 +60,14 @@ func InitFromDB(db *gorm.DB) error {
 
 	globalManager = manager
 	manager.StartHealthCheck(5 * time.Minute)
+
+	if db != nil {
+		globalBindingResolver = NewBindingResolver(db)
+		if err := seedBindings(db); err != nil {
+			log.Printf("storage: seed bindings: %v", err)
+		}
+	}
+
 	return nil
 }
 
@@ -208,12 +213,84 @@ func GetByCode(code string) FileStorage {
 // GetManager 返回全局 ProfileManager
 func GetManager() *ProfileManager { return globalManager }
 
+// ResolveModule 返回指定业务模块的存储绑定
+func ResolveModule(moduleCode string) *ResolvedBinding {
+	if globalBindingResolver == nil {
+		return &ResolvedBinding{Storage: Get()}
+	}
+	return globalBindingResolver.Resolve(moduleCode)
+}
+
+// ResolveModulePath 解析绑定后拼接完整路径
+func ResolveModulePath(moduleCode string, relativePath string) (*ResolvedBinding, string) {
+	if globalBindingResolver == nil {
+		return &ResolvedBinding{Storage: Get()}, relativePath
+	}
+	return globalBindingResolver.ResolvePath(moduleCode, relativePath)
+}
+
+// InvalidateBindingCache 清除绑定缓存（绑定配置变更时调用）
+func InvalidateBindingCache() {
+	if globalBindingResolver != nil {
+		globalBindingResolver.Invalidate()
+	}
+}
+
+// GetBindingResolver 返回全局 BindingResolver
+func GetBindingResolver() *BindingResolver {
+	return globalBindingResolver
+}
+
+// seedBindings 插入默认绑定记录（若表为空）
+func seedBindings(db *gorm.DB) error {
+	var count int64
+	db.Table("storage_bindings").Count(&count)
+	if count > 0 {
+		return nil
+	}
+
+	var defaultProfile StorageInstanceRecord
+	err := db.Where("enabled = ?", true).Order("sort_order ASC").First(&defaultProfile).Error
+	defaultCode := "local"
+	if err != nil {
+		log.Printf("storage: no enabled storage instance found for seed bindings, using fallback code 'local'")
+	} else {
+		defaultCode = defaultProfile.Code
+	}
+
+	type bindingSeed struct {
+		ID          string
+		ModuleCode  string
+		ModuleName  string
+		ProfileCode string
+		BasePath    string
+	}
+
+	seeds := []bindingSeed{
+		{ID: "seed-bind-import-export", ModuleCode: ModuleImportExport, ModuleName: "导入导出", ProfileCode: defaultCode, BasePath: "exports"},
+		{ID: "seed-bind-sqlite", ModuleCode: ModuleSQLite, ModuleName: "SQLite数据库", ProfileCode: defaultCode, BasePath: "sqlite"},
+		{ID: "seed-bind-script", ModuleCode: ModuleScript, ModuleName: "脚本管理", ProfileCode: defaultCode, BasePath: "scripts"},
+	}
+
+	for _, s := range seeds {
+		err := db.Exec(
+			"INSERT INTO storage_bindings (id, module_code, module_name, profile_code, base_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			s.ID, s.ModuleCode, s.ModuleName, s.ProfileCode, s.BasePath, time.Now(), time.Now(),
+		).Error
+		if err != nil {
+			log.Printf("storage: seed binding %q failed: %v", s.ModuleCode, err)
+		}
+	}
+	return nil
+}
+
 // Reset 重置（仅测试用）
 func Reset() {
 	if globalManager != nil {
 		_ = globalManager.Shutdown()
 	}
 	globalManager = nil
+	globalBindingResolver = nil
 }
 
 // EnsureDataDir ensures the local data directory exists

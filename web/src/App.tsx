@@ -17,6 +17,9 @@ import SQLEditor from './pages/SQLEditor';
 import Compare from './pages/Compare';
 import AuditLogs from './pages/AuditLogs';
 import Settings from './pages/Settings';
+import Files from './pages/Files';
+import StorageManagement from './pages/StorageManagement';
+import ExportTasks from './pages/ExportTasks';
 
 // Protected route wrapper
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({
@@ -101,6 +104,9 @@ const App: React.FC = () => {
             <Route path="datasources" element={<DataSources />} />
             <Route path="query" element={<SQLEditor />} />
             <Route path="compare" element={<Compare />} />
+            <Route path="files" element={<Files />} />
+            <Route path="settings/storage" element={<StorageManagement />} />
+            <Route path="export-tasks" element={<ExportTasks />} />
             <Route path="audit" element={<AuditLogs />} />
             <Route path="settings" element={<Settings />} />
           </Route>

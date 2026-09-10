@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Modal, Checkbox, Select, Button, Spin, message, Space, Radio, Statistic, Row, Col,
 } from 'antd';
@@ -18,6 +19,7 @@ interface Props {
 }
 
 const ExportModal: React.FC<Props> = ({ open, dataSourceId, schema, dbType, onClose }) => {
+  const { t } = useTranslation('exportModal');
   const [tables, setTables] = useState<TableListItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedTables, setSelectedTables] = useState<string[]>([]);
@@ -49,7 +51,7 @@ const ExportModal: React.FC<Props> = ({ open, dataSourceId, schema, dbType, onCl
 
   const handleGenerate = async () => {
     if (!includeStructure && !includeData) {
-      message.warning('请至少选择导出结构或数据');
+      message.warning(t('selectAtLeastOne'));
       return;
     }
     setGenerating(true);
@@ -83,13 +85,13 @@ const ExportModal: React.FC<Props> = ({ open, dataSourceId, schema, dbType, onCl
     a.download = `${schema}_${targetDbType}_${new Date().toISOString().slice(0, 10)}.sql`;
     a.click();
     URL.revokeObjectURL(url);
-    message.success('导出文件已下载');
+    message.success(t('fileDownloaded'));
   };
 
   const handleCopy = () => {
     navigator.clipboard.writeText(generatedSQL).then(
-      () => message.success('已复制到剪贴板'),
-      () => message.error('复制失败'),
+      () => message.success(t('copiedToClipboard')),
+      () => message.error(t('copyFailed')),
     );
   };
 
@@ -109,13 +111,13 @@ const ExportModal: React.FC<Props> = ({ open, dataSourceId, schema, dbType, onCl
 
   return (
     <Modal
-      title={step === 'config' ? `导出 SQL · ${schema}` : `预览导出 · ${schema}`}
+      title={step === 'config' ? `${t('exportSQL')} · ${schema}` : `${t('previewExport')} · ${schema}`}
       open={open}
       onCancel={onClose}
       width={step === 'preview' ? 900 : 600}
       footer={step === 'config' ? (
         <Space>
-          <Button onClick={onClose}>取消</Button>
+          <Button onClick={onClose}>{t('cancel')}</Button>
           <Button
             type="primary"
             icon={<EyeOutlined />}
@@ -123,14 +125,14 @@ const ExportModal: React.FC<Props> = ({ open, dataSourceId, schema, dbType, onCl
             disabled={selectedTables.length === 0}
             onClick={handleGenerate}
           >
-            生成 SQL
+            {t('generateSQL')}
           </Button>
         </Space>
       ) : (
         <Space>
-          <Button onClick={() => setStep('config')}>返回修改</Button>
-          <Button icon={<CopyOutlined />} onClick={handleCopy}>复制</Button>
-          <Button type="primary" icon={<DownloadOutlined />} onClick={handleDownload}>下载 .sql</Button>
+          <Button onClick={() => setStep('config')}>{t('backToModify')}</Button>
+          <Button icon={<CopyOutlined />} onClick={handleCopy}>{t('copy')}</Button>
+          <Button type="primary" icon={<DownloadOutlined />} onClick={handleDownload}>{t('downloadSql')}</Button>
         </Space>
       )}
       destroyOnHidden
@@ -138,7 +140,7 @@ const ExportModal: React.FC<Props> = ({ open, dataSourceId, schema, dbType, onCl
       {step === 'config' ? (
         <Spin spinning={loading || generating}>
           <div style={{ marginBottom: 16 }}>
-            <div style={{ marginBottom: 8, fontWeight: 500 }}>目标数据库类型</div>
+            <div style={{ marginBottom: 8, fontWeight: 500 }}>{t('targetDbType')}</div>
             <Radio.Group value={targetDbType} onChange={e => setTargetDbType(e.target.value)}>
               <Radio.Button value="mysql">MySQL</Radio.Button>
               <Radio.Button value="postgres">PostgreSQL</Radio.Button>
@@ -146,19 +148,19 @@ const ExportModal: React.FC<Props> = ({ open, dataSourceId, schema, dbType, onCl
             </Radio.Group>
             {targetDbType !== dbType && (
               <span style={{ marginLeft: 8, color: '#fa8c16', fontSize: 12 }}>
-                将进行类型转换: {dbType} → {targetDbType}
+                {t('typeConversion')}: {dbType} → {targetDbType}
               </span>
             )}
           </div>
 
           <div style={{ marginBottom: 16 }}>
-            <div style={{ marginBottom: 8, fontWeight: 500 }}>导出内容</div>
+            <div style={{ marginBottom: 8, fontWeight: 500 }}>{t('exportContent')}</div>
             <Space>
               <Checkbox checked={includeStructure} onChange={e => setIncludeStructure(e.target.checked)}>
-                表结构 (DDL)
+                {t('tableStructureDDL')}
               </Checkbox>
               <Checkbox checked={includeData} onChange={e => setIncludeData(e.target.checked)}>
-                数据 (INSERT)
+                {t('dataINSERT')}
               </Checkbox>
               {includeData && (
                 <Select
@@ -167,10 +169,10 @@ const ExportModal: React.FC<Props> = ({ open, dataSourceId, schema, dbType, onCl
                   onChange={setBatchSize}
                   style={{ width: 120 }}
                   options={[
-                    { label: '100 行/批', value: 100 },
-                    { label: '500 行/批', value: 500 },
-                    { label: '1000 行/批', value: 1000 },
-                    { label: '5000 行/批', value: 5000 },
+                    { label: t('rowsPerBatch100'), value: 100 },
+                    { label: t('rowsPerBatch500'), value: 500 },
+                    { label: t('rowsPerBatch1000'), value: 1000 },
+                    { label: t('rowsPerBatch5000'), value: 5000 },
                   ]}
                 />
               )}
@@ -178,7 +180,7 @@ const ExportModal: React.FC<Props> = ({ open, dataSourceId, schema, dbType, onCl
           </div>
 
           <div style={{ marginBottom: 8, fontWeight: 500 }}>
-            选择表 ({selectedTables.length}/{tables.length})
+            {t('selectTables')} ({selectedTables.length}/{tables.length})
           </div>
           <div style={{ marginBottom: 8 }}>
             <Checkbox
@@ -186,7 +188,7 @@ const ExportModal: React.FC<Props> = ({ open, dataSourceId, schema, dbType, onCl
               indeterminate={indeterminate}
               onChange={e => toggleAll(e.target.checked)}
             >
-              全选
+              {t('selectAll')}
             </Checkbox>
           </div>
           <div style={{ maxHeight: 300, overflow: 'auto', border: '1px solid #f0f0f0', borderRadius: 4, padding: 8 }}>
@@ -213,16 +215,16 @@ const ExportModal: React.FC<Props> = ({ open, dataSourceId, schema, dbType, onCl
           {stats && (
             <Row gutter={16} style={{ marginBottom: 12 }}>
               <Col span={8}>
-                <Statistic title="导出表数" value={stats.tableCount} />
+                <Statistic title={t('tablesExported')} value={stats.tableCount} />
               </Col>
               <Col span={8}>
-                <Statistic title="数据行数" value={stats.rowCount} />
+                <Statistic title={t('dataRows')} value={stats.rowCount} />
               </Col>
               <Col span={4}>
-                <Statistic title="耗时" value={stats.durationMs} suffix="ms" />
+                <Statistic title={t('duration')} value={stats.durationMs} suffix="ms" />
               </Col>
               <Col span={4}>
-                <Statistic title="大小" value={sqlSize} />
+                <Statistic title={t('size')} value={sqlSize} />
               </Col>
             </Row>
           )}

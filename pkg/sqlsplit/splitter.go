@@ -40,6 +40,7 @@ func DialectFromDBType(dbType string) Dialect {
 }
 
 var delimiterRe = regexp.MustCompile(`(?i)^DELIMITER\s+([^\s;]+)`)
+var goDelimiterRe = regexp.MustCompile(`(?i)^GO\s*$`)
 
 
 // StmtType classifies SQL statements
@@ -63,19 +64,21 @@ type SplitResult struct {
 	DegradedMsgs []string
 }
 
-// SplitSQL splits SQL into individual statements with GoSQLX validation
-func SplitSQL(sqlText string) ([]string, error) {
-	r, err := SplitSQLDetailed(sqlText)
+// SplitSQL splits SQL into individual statements with GoSQLX validation.
+// dialect controls string-aware splitting (e.g. MySQL backslash escapes, MSSQL GO).
+// Pass "" for default behavior (standard SQL, no GO delimiter).
+func SplitSQL(sqlText string, dialect string) ([]string, error) {
+	r, err := SplitSQLDetailed(sqlText, dialect)
 	if err != nil {
 		return nil, err
 	}
 	return r.Statements, nil
 }
 
-// SplitSQLDetailed splits and classifies with GoSQLX tokenizer validation
-func SplitSQLDetailed(sqlText string) (*SplitResult, error) {
+// SplitSQLDetailed splits and classifies with GoSQLX tokenizer validation.
+func SplitSQLDetailed(sqlText string, dialect string) (*SplitResult, error) {
 	// Step 1: delimiter-based buffered splitting
-	rawStmts, err := splitByDelimiter(sqlText)
+	rawStmts, err := splitByDelimiter(sqlText, dialect)
 	if err != nil {
 		return nil, err
 	}
@@ -105,8 +108,9 @@ func SplitSQLDetailed(sqlText string) (*SplitResult, error) {
 	return result, nil
 }
 
-// splitByDelimiter splits SQL by delimiter, handling BEGIN/END blocks and DELIMITER changes
-func splitByDelimiter(sqlText string) ([]string, error) {
+// splitByDelimiter splits SQL by delimiter, handling BEGIN/END blocks,
+// DELIMITER changes, string literals, and dialect-specific batch separators.
+func splitByDelimiter(sqlText string, dialect string) ([]string, error) {
 	reader := strings.NewReader(sqlText)
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 1024*1024), 10*1024*1024)
@@ -114,6 +118,9 @@ func splitByDelimiter(sqlText string) ([]string, error) {
 	delimiter := ";"
 	var buf strings.Builder
 	blockDepth := 0
+	// State variables must be outside the loop to persist across lines (multi-line strings).
+	inSingleQuote := false
+	inDoubleQuote := false
 	var stmts []string
 
 	for scanner.Scan() {
@@ -131,6 +138,22 @@ func splitByDelimiter(sqlText string) ([]string, error) {
 
 		buf.WriteString(line)
 		buf.WriteByte('\n')
+
+		// Update string state; skip delimiter check if inside a string.
+		updateStringState(trimmed, dialect, &inSingleQuote, &inDoubleQuote)
+		if inSingleQuote || inDoubleQuote {
+			continue
+		}
+
+		// MSSQL GO batch delimiter (must be on its own line, outside strings).
+		if dialect == "mssql" && goDelimiterRe.MatchString(trimmed) {
+			stmt := strings.TrimSpace(buf.String())
+			if stmt != "" {
+				stmts = append(stmts, stmt)
+			}
+			buf.Reset()
+			continue
+		}
 
 		upper := strings.ToUpper(trimmed)
 		if strings.HasPrefix(upper, "BEGIN") || (strings.HasPrefix(upper, "CREATE") && strings.Contains(upper, "BEGIN")) {
@@ -163,6 +186,71 @@ func splitByDelimiter(sqlText string) ([]string, error) {
 	return stmts, scanner.Err()
 }
 
+
+// updateStringState updates inSingleQuote/inDoubleQuote based on the content of a trimmed line.
+// It correctly handles:
+//   - Standard SQL: '' inside a single-quoted string is an escaped quote (not end of string)
+//   - MySQL: \' ends/starts a string, \\ prevents the next char from being special
+//   - Double-quoted identifiers (PostgreSQL, Oracle, standard SQL)
+func updateStringState(line string, dialect string, inSingleQuote *bool, inDoubleQuote *bool) {
+	isMySQL := dialect == "mysql" || dialect == "mariadb" || dialect == "oceanbase"
+
+	i := 0
+	for i < len(line) {
+		c := line[i]
+
+		if *inSingleQuote {
+			if isMySQL && c == '\\' && i+1 < len(line) {
+				i += 2 // skip escaped character
+				continue
+			}
+			if c == '\'' {
+				if isMySQL {
+					*inSingleQuote = false
+					i++
+					continue
+				}
+				// Standard SQL: '' is an escaped quote inside the string
+				if i+1 < len(line) && line[i+1] == '\'' {
+					i += 2
+					continue
+				}
+				*inSingleQuote = false
+				i++
+				continue
+			}
+			i++
+			continue
+		}
+
+		if *inDoubleQuote {
+			if c == '"' {
+				if i+1 < len(line) && line[i+1] == '"' {
+					i += 2 // "" escaped double-quote
+					continue
+				}
+				*inDoubleQuote = false
+				i++
+				continue
+			}
+			i++
+			continue
+		}
+
+		// Not inside any string
+		switch c {
+		case '\'':
+			*inSingleQuote = true
+		case '"':
+			*inDoubleQuote = true
+		case '-':
+			if i+1 < len(line) && line[i+1] == '-' {
+				return // rest of line is a comment
+			}
+		}
+		i++
+	}
+}
 
 func classifyStmtType(stmt string) StmtType {
 	upper := strings.ToUpper(strings.TrimSpace(stmt))
@@ -208,13 +296,15 @@ func classifyStatement(stmt string, result *SplitResult) {
 
 // SplitStream reads SQL from reader and calls fn for each complete statement.
 // Uses delimiter-based buffered reading — does NOT load full file into memory.
-func SplitStream(reader io.Reader, fn func(stmt string) error) error {
+func SplitStream(reader io.Reader, dialect string, fn func(stmt string) error) error {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 1024*1024), 10*1024*1024)
 
 	delimiter := ";"
 	var buf strings.Builder
 	blockDepth := 0
+	inSingleQuote := false
+	inDoubleQuote := false
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -228,6 +318,23 @@ func SplitStream(reader io.Reader, fn func(stmt string) error) error {
 		}
 		buf.WriteString(line)
 		buf.WriteByte('\n')
+
+		updateStringState(trimmed, dialect, &inSingleQuote, &inDoubleQuote)
+		if inSingleQuote || inDoubleQuote {
+			continue
+		}
+
+		if dialect == "mssql" && goDelimiterRe.MatchString(trimmed) {
+			stmt := strings.TrimSpace(buf.String())
+			if stmt != "" {
+				if err := fn(stmt); err != nil {
+					return err
+				}
+			}
+			buf.Reset()
+			continue
+		}
+
 		upper := strings.ToUpper(trimmed)
 		if strings.HasPrefix(upper, "BEGIN") {
 			blockDepth++
@@ -240,8 +347,7 @@ func SplitStream(reader io.Reader, fn func(stmt string) error) error {
 			stmt = strings.TrimSuffix(stmt, delimiter)
 			stmt = strings.TrimSpace(stmt)
 			if stmt != "" {
-				finalStmt := stmt // value copy before Reset
-				if err := fn(finalStmt); err != nil {
+				if err := fn(stmt); err != nil {
 					return err
 				}
 			}

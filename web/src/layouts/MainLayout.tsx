@@ -24,6 +24,9 @@ import {
   UserOutlined,
   KeyOutlined,
   TranslationOutlined,
+  FileOutlined,
+  ExportOutlined,
+  SwapOutlined,
 } from '@ant-design/icons';
 import { authAPI } from '../api';
 
@@ -55,9 +58,18 @@ const MainLayout: React.FC = () => {
     },
     { type: 'divider' as const },
     {
+      key: 'migrate', icon: <SwapOutlined />, label: t('nav.migrate'),
+      children: [
+        { key: '/files', icon: <FileOutlined />, label: t('nav.files', '文件管理') },
+        { key: '/export-tasks', icon: <ExportOutlined />, label: t('nav.exportTasks', '导出导入') },
+      ],
+    },
+    { type: 'divider' as const },
+    {
       key: 'system', icon: <SettingOutlined />, label: t('nav.systemManage'),
       children: [
         { key: '/audit', label: t('nav.auditLogs') },
+        { key: '/settings/storage', label: t('nav.storageManagement', '存储管理') },
         { key: '/settings', label: t('nav.settings') },
       ],
     },

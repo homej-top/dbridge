@@ -413,6 +413,41 @@ func (s *LocalFileStorage) DeleteBatch(ctx context.Context, paths []string) erro
 	return nil
 }
 
+func (s *LocalFileStorage) copyLocal(ctx context.Context, srcPath, dstPath string) error {
+	srcFull, err := s.resolve(srcPath)
+	if err != nil {
+		return fmt.Errorf("storage: resolve source: %w", err)
+	}
+
+	dstFull, err := s.resolve(dstPath)
+	if err != nil {
+		return fmt.Errorf("storage: resolve dest: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(dstFull), 0755); err != nil {
+		return fmt.Errorf("storage: mkdir for copy: %w", err)
+	}
+
+	srcFile, err := os.Open(srcFull)
+	if err != nil {
+		return fmt.Errorf("storage: open source: %w", err)
+	}
+	defer srcFile.Close()
+
+	dstFile, err := os.Create(dstFull)
+	if err != nil {
+		return fmt.Errorf("storage: create dest: %w", err)
+	}
+	defer dstFile.Close()
+
+	buf := make([]byte, copyBufferSize)
+	if _, err := io.CopyBuffer(dstFile, srcFile, buf); err != nil {
+		return fmt.Errorf("storage: copy data: %w", err)
+	}
+
+	return nil
+}
+
 // ─── ctxReader: 上下文感知的 io.Reader ──────────────────────────────
 
 type ctxReader struct {

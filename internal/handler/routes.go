@@ -224,4 +224,147 @@ func RegisterRoutes(r *gin.RouterGroup, cfg *config.Config, logger *zap.Logger) 
 		settings.GET("", settingsHandler.Get)
 		settings.PUT("", settingsHandler.Update)
 	}
+
+	// Script routes (protected)
+	scriptHandler := NewScriptHandler(logger)
+	scripts := r.Group("/scripts")
+	scripts.Use(protectedMW...)
+	{
+		scripts.GET("", scriptHandler.List)
+		scripts.GET("/tree", scriptHandler.Tree)
+		scripts.POST("", scriptHandler.Create)
+		scripts.POST("/folders", scriptHandler.CreateFolder)
+		scripts.GET("/fs/list", scriptHandler.FsList)
+		scripts.GET("/fs/read", scriptHandler.FsRead)
+		scripts.PUT("/fs/save", scriptHandler.FsSave)
+		scripts.POST("/fs/mkdir", scriptHandler.FsMkdir)
+		scripts.DELETE("/fs/delete", scriptHandler.FsDelete)
+		scripts.PUT("/fs/rename", scriptHandler.FsRename)
+		scripts.GET("/:id", scriptHandler.Get)
+		scripts.PUT("/:id", scriptHandler.Update)
+		scripts.DELETE("/:id", scriptHandler.Delete)
+		scripts.POST("/:id/move", scriptHandler.Move)
+	}
+
+	// AI Skill routes (protected)
+	aiSkillHandler := NewAISkillHandler(logger)
+	aiSkills := r.Group("/ai-skills")
+	aiSkills.Use(protectedMW...)
+	{
+		aiSkills.GET("", aiSkillHandler.List)
+		aiSkills.POST("", aiSkillHandler.Create)
+		aiSkills.POST("/import", aiSkillHandler.Import)
+		aiSkills.GET("/:id", aiSkillHandler.Get)
+		aiSkills.PUT("/:id", aiSkillHandler.Update)
+		aiSkills.DELETE("/:id", aiSkillHandler.Delete)
+		aiSkills.POST("/:id/toggle", aiSkillHandler.ToggleActive)
+		aiSkills.GET("/:id/preview", aiSkillHandler.Preview)
+		aiSkills.POST("/:id/test", aiSkillHandler.Test)
+		aiSkills.GET("/:id/versions", aiSkillHandler.Versions)
+		aiSkills.POST("/:id/rollback", aiSkillHandler.Rollback)
+		aiSkills.GET("/:id/export", aiSkillHandler.Export)
+	}
+
+	// Report routes (protected)
+	reportHandler := NewReportHandler(logger, cfg)
+	reports := r.Group("/reports")
+	reports.Use(protectedMW...)
+	{
+		reports.GET("", reportHandler.List)
+		reports.POST("", reportHandler.Create)
+		reports.POST("/generate-sql", reportHandler.GenerateSQL)
+		reports.GET("/:id", reportHandler.Get)
+		reports.PUT("/:id", reportHandler.Update)
+		reports.DELETE("/:id", reportHandler.Delete)
+		reports.POST("/:id/execute", reportHandler.Execute)
+	}
+
+	// Report category routes (protected)
+	reportCatHandler := NewReportCategoryHandler(logger)
+	reportCategories := r.Group("/report-categories")
+	reportCategories.Use(protectedMW...)
+	{
+		reportCategories.GET("", reportCatHandler.List)
+		reportCategories.POST("", reportCatHandler.Create)
+		reportCategories.PUT("/:id", reportCatHandler.Update)
+		reportCategories.DELETE("/:id", reportCatHandler.Delete)
+		reportCategories.POST("/:id/move", reportCatHandler.Move)
+	}
+
+	// Dashboard report routes (protected)
+	dashboardReportHandler := NewDashboardReportHandler(logger)
+	dashboards := r.Group("/dashboards")
+	dashboards.Use(protectedMW...)
+	{
+		dashboards.GET("", dashboardReportHandler.List)
+		dashboards.POST("", dashboardReportHandler.Create)
+		dashboards.GET("/:id", dashboardReportHandler.Get)
+		dashboards.PUT("/:id", dashboardReportHandler.Update)
+		dashboards.DELETE("/:id", dashboardReportHandler.Delete)
+	}
+
+	// File Management routes (protected)
+	fileMgrHandler := NewFileManagerHandler(nil, cfg, logger)
+	files := r.Group("/files")
+	files.Use(protectedMW...)
+	{
+		files.GET("", fileMgrHandler.List)
+		files.GET("/tree", fileMgrHandler.Tree)
+		files.POST("/upload", fileMgrHandler.Upload)
+		files.GET("/download", fileMgrHandler.Download)
+		files.GET("/info", fileMgrHandler.Stat)
+		files.POST("/mkdir", fileMgrHandler.Mkdir)
+		files.PUT("/rename", fileMgrHandler.Rename)
+		files.DELETE("", fileMgrHandler.Delete)
+		files.DELETE("/dir", fileMgrHandler.RemoveDir)
+		files.DELETE("/batch", fileMgrHandler.DeleteBatch)
+		files.GET("/profiles", fileMgrHandler.ListProfiles)
+		files.POST("/profiles", middleware.RequireRole("admin"), fileMgrHandler.CreateProfile)
+		files.DELETE("/profiles/:name", middleware.RequireRole("admin"), fileMgrHandler.DeleteProfile)
+		files.GET("/profiles/:name/test", fileMgrHandler.TestProfile)
+		files.PUT("/profiles/:name/toggle", middleware.RequireRole("admin"), fileMgrHandler.ToggleProfile)
+		files.PUT("/profiles/:name", middleware.RequireRole("admin"), fileMgrHandler.UpdateProfile)
+		files.PUT("/profiles/default", middleware.RequireRole("admin", "operator"), fileMgrHandler.SetDefaultProfile)
+		files.GET("/quota", fileMgrHandler.GetQuota)
+		files.POST("/batch/download", fileMgrHandler.BatchDownload)
+		files.GET("/bindings", middleware.RequireRole("admin"), fileMgrHandler.ListBindings)
+		files.PUT("/bindings/:module_code", middleware.RequireRole("admin"), fileMgrHandler.UpdateBinding)
+		files.POST("/copy", fileMgrHandler.CopyFiles)
+		files.POST("/move", fileMgrHandler.MoveFiles)
+		files.POST("/sync", fileMgrHandler.SyncFiles)
+	}
+
+	// Import/Export Task routes
+	taskHandler := NewTaskHandler(logger)
+
+	exportTasks := r.Group("/export-tasks")
+	exportTasks.Use(protectedMW...)
+	{
+		exportTasks.POST("", taskHandler.CreateExportTask)
+		exportTasks.GET("", taskHandler.ListTasks)
+		exportTasks.GET("/:id", taskHandler.GetTask)
+		exportTasks.DELETE("/:id", taskHandler.DeleteTask)
+		exportTasks.POST("/:id/start", taskHandler.StartExecution)
+		exportTasks.POST("/:id/cancel", taskHandler.CancelExecution)
+		exportTasks.GET("/:id/executions", taskHandler.ListExecutions)
+		exportTasks.GET("/:id/executions/:eid", taskHandler.GetExecution)
+		exportTasks.GET("/:id/executions/:eid/logs", taskHandler.GetExecutionLogs)
+		exportTasks.GET("/:id/executions/:eid/download", taskHandler.DownloadResult)
+	}
+
+	importTasks := r.Group("/import-tasks")
+	importTasks.Use(protectedMW...)
+	{
+		importTasks.POST("", taskHandler.CreateImportTask)
+		importTasks.GET("", taskHandler.ListTasks)
+		importTasks.GET("/:id", taskHandler.GetTask)
+		importTasks.DELETE("/:id", taskHandler.DeleteTask)
+		importTasks.POST("/:id/start", taskHandler.StartExecution)
+		importTasks.POST("/:id/cancel", taskHandler.CancelExecution)
+		importTasks.GET("/:id/executions", taskHandler.ListExecutions)
+		importTasks.GET("/:id/executions/:eid", taskHandler.GetExecution)
+		importTasks.GET("/:id/executions/:eid/logs", taskHandler.GetExecutionLogs)
+	}
+
+	r.GET("/storage-files", chainMW(protectedMW, taskHandler.BrowseStorageFiles)...)
 }

@@ -152,6 +152,15 @@ func AutoMigrate() error {
 		&AuditPurgeLog{},
 		&Setting{},
 		&LockRecord{},
+		&StorageInstance{},
+		&StorageBinding{},
+		&Task{},
+		&TaskExecution{},
+		&AISkill{},
+		&AISkillVersion{},
+		&Agent{},
+		&AgentDataSource{},
+		&SemanticCube{},
 	)
 }
 

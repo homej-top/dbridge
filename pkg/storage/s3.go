@@ -668,6 +668,19 @@ func (s *S3FileStorage) DeleteBatch(ctx context.Context, paths []string) error {
 	return err
 }
 
+func (s *S3FileStorage) copyObject(ctx context.Context, srcPath, dstPath string) error {
+	srcKey := s.key(srcPath)
+	dstKey := s.key(dstPath)
+
+	copySource := s.config.Bucket + "/" + srcKey
+	_, err := s.client.CopyObject(ctx, &s3.CopyObjectInput{
+		Bucket:     aws.String(s.config.Bucket),
+		CopySource: aws.String(copySource),
+		Key:        aws.String(dstKey),
+	})
+	return err
+}
+
 // ─── helpers ──────────────────────────────────────────────────────────
 
 func sortTreeNodes(nodes []*TreeNode) {

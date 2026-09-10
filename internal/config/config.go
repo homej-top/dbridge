@@ -21,6 +21,7 @@ type Config struct {
 	Crypto       CryptoConfig       `mapstructure:"crypto"`
 	CORS         CORSConfig         `mapstructure:"cors"`
 	Log          LogConfig          `mapstructure:"log"`
+	AI           AIConfig           `mapstructure:"ai"`
 	Sync         SyncConfig         `mapstructure:"sync"`
 	Storage      StorageConfig      `mapstructure:"storage"`
 }
@@ -119,6 +120,18 @@ type LogConfig struct {
 	Format   string `mapstructure:"format"`
 	Output   string `mapstructure:"output"`
 	FilePath string `mapstructure:"file_path"`
+}
+
+type AIConfig struct {
+	Provider    string        `mapstructure:"provider"`
+	APIKey      string        `mapstructure:"api_key"`
+	BaseURL     string        `mapstructure:"base_url"`
+	Model       string        `mapstructure:"model"`
+	MaxTokens   int           `mapstructure:"max_tokens"`
+	Temperature float64       `mapstructure:"temperature"`
+	Timeout     time.Duration `mapstructure:"timeout"`
+	RateLimit   int           `mapstructure:"rate_limit"`
+	DailyQuota  int           `mapstructure:"daily_quota"`
 }
 
 type SyncConfig struct {
