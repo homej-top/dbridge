@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Modal, Form, Input, Select, message } from 'antd';
 import Editor from '@monaco-editor/react';
+import { useTranslation } from 'react-i18next';
 import { queryAPI } from '../api';
 import { dialectOf, getDialect } from '../utils/dialect';
 
@@ -36,6 +37,7 @@ const MYSQL_COLLATIONS: Record<string, string[]> = {
 const SchemaFormModal: React.FC<SchemaFormModalProps> = ({
   open, mode, dataSourceId, dbType, level, database, initValues, onClose, onSuccess,
 }) => {
+  const { t } = useTranslation();
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [newName, setNewName] = useState('');
@@ -70,20 +72,24 @@ const SchemaFormModal: React.FC<SchemaFormModalProps> = ({
       const name = formName;
       if (!name) return '';
 
-      const createLevel = level || (
+      // Oracle uses CREATE USER for schemas
+      let createLevel = level || (
         dialect === 'mysql' ? 'database' :
         dialect === 'oracle' ? 'user' :
         'schema'
       );
+      if (dialect === 'oracle' && createLevel === 'schema') {
+        createLevel = 'user';
+      }
 
       if (createLevel === 'database') {
         return gen.createDatabase(name, form.getFieldValue('charset'), form.getFieldValue('collation'));
       }
-      if (createLevel === 'schema') {
-        return gen.createSchema(name);
-      }
       if (createLevel === 'user') {
         if (dialect === 'oracle') return gen.createUser(name, name);
+      }
+      if (createLevel === 'schema') {
+        return gen.createSchema(name);
       }
       return gen.createSchema(name);
     }
@@ -118,18 +124,18 @@ const SchemaFormModal: React.FC<SchemaFormModalProps> = ({
     try {
       await form.validateFields();
       if (!ddl) {
-        message.warning('没有需要执行的变更');
+        message.warning(t('schemaForm.noChanges'));
         return;
       }
       // Check if DDL is only comments (e.g., SQL Server schema rename warning)
       const ddlLines = ddl.split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('--'));
       if (ddlLines.length === 0) {
-        message.warning('当前操作不支持自动执行,请手动执行显示的SQL语句');
+        message.warning(t('schemaForm.manualExecWarning'));
         return;
       }
       setLoading(true);
       await queryAPI.executeDDL({ data_source_id: dataSourceId, sql: ddl, database });
-      message.success(mode === 'create' ? `${unitLabel} 创建成功` : `${unitLabel} 修改成功`);
+      message.success(mode === 'create' ? `${unitLabel} ${t('schemaForm.createSuccess')}` : `${unitLabel} ${t('schemaForm.editSuccess')}`);
       onSuccess();
       onClose();
     } catch {
@@ -141,17 +147,17 @@ const SchemaFormModal: React.FC<SchemaFormModalProps> = ({
 
   // Determine the label and title based on level and DB type
   const unitLabel = (() => {
-    if (level === 'user') return 'User';
+    if (level === 'user') return t('tree.user');
     if (level === 'database') {
-      if (dialectOf(dbType) === 'mysql') return '数据库';
-      return 'Database';
+      if (dialectOf(dbType) === 'mysql') return t('tree.database');
+      return t('tree.database');
     }
-    if (level === 'schema') return 'Schema';
+    if (level === 'schema') return t('tree.schema');
     // Fallback
-    if (dialectOf(dbType) === 'mysql') return '数据库';
-    if (dialectOf(dbType) === 'oracle') return 'User';
-    if (dialectOf(dbType) === 'postgres' || dialectOf(dbType) === 'sqlserver') return 'Schema';
-    return 'Schema';
+    if (dialectOf(dbType) === 'mysql') return t('tree.database');
+    if (dialectOf(dbType) === 'oracle') return t('tree.user');
+    if (dialectOf(dbType) === 'postgres' || dialectOf(dbType) === 'sqlserver') return t('tree.schema');
+    return t('tree.schema');
   })();
 
   const collationOptions = dialectOf(dbType) === 'mysql'
@@ -160,50 +166,50 @@ const SchemaFormModal: React.FC<SchemaFormModalProps> = ({
 
   return (
     <Modal
-      title={mode === 'create' ? `新建 ${unitLabel}` : `修改 ${unitLabel} · ${initValues?.name || ''}`}
+      title={mode === 'create' ? `${t('schemaForm.create')} ${unitLabel}` : `${t('schemaForm.edit')} ${unitLabel} · ${initValues?.name || ''}`}
       open={open}
       onCancel={onClose}
       onOk={handleSubmit}
       confirmLoading={loading}
-      okText="执行"
-      cancelText="取消"
+      okText={t('schemaForm.execute')}
+      cancelText={t('schemaForm.cancel')}
       width={560}
       destroyOnHidden
     >
       <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
         <Form.Item
           name="name"
-          label={unitLabel + ' 名称'}
+          label={`${unitLabel} ${t('schemaForm.nameLabel')}`}
           rules={[
-            { required: mode === 'create', message: '请输入名称' },
-            { pattern: /^[a-zA-Z_][a-zA-Z0-9_]*$/, message: '仅允许字母、数字、下划线，且以字母或下划线开头' },
+            { required: mode === 'create', message: t('schemaForm.nameRequired') },
+            { pattern: /^[a-zA-Z_][a-zA-Z0-9_]*$/, message: t('schemaForm.namePattern') },
           ]}
         >
           <Input
-            placeholder="请输入名称"
+            placeholder={t('schemaForm.namePlaceholder')}
             disabled={mode === 'edit' && (dialectOf(dbType) === 'mysql' || dialectOf(dbType) === 'oracle')}
           />
         </Form.Item>
 
         {mode === 'edit' && dialectOf(dbType) === 'oracle' && (
           <div style={{ color: '#faad14', fontSize: 12, marginBottom: 16 }}>
-            Oracle 不支持重命名 User。如需修改密码，请在下方输入新密码。
+            {t('schemaForm.oracleRenameWarning')}
           </div>
         )}
 
         {mode === 'edit' && (dialectOf(dbType) === 'postgres' || dialectOf(dbType) === 'sqlserver') && (
-          <Form.Item name="new_name" label="新名称（留空则不重命名）">
+          <Form.Item name="new_name" label={t('schemaForm.newNameLabel')}>
             <Input
-              placeholder="输入新名称以重命名"
+              placeholder={t('schemaForm.newNamePlaceholder')}
               onChange={(e) => setNewName(e.target.value)}
             />
           </Form.Item>
         )}
 
         {mode === 'edit' && dialectOf(dbType) === 'oracle' && (
-          <Form.Item name="new_password" label="新密码（留空则不修改）">
+          <Form.Item name="new_password" label={t('schemaForm.newPasswordLabel')}>
             <Input.Password
-              placeholder="输入新密码以修改"
+              placeholder={t('schemaForm.newPasswordPlaceholder')}
               visibilityToggle
             />
           </Form.Item>
@@ -211,7 +217,7 @@ const SchemaFormModal: React.FC<SchemaFormModalProps> = ({
 
         {dialectOf(dbType) === 'mysql' && (
           <>
-            <Form.Item name="charset" label="字符集">
+            <Form.Item name="charset" label={t('schemaForm.charsetLabel')}>
               <Select
                 options={MYSQL_CHARSETS.map((c: string) => ({ label: c, value: c }))}
                 onChange={() => {
@@ -223,14 +229,14 @@ const SchemaFormModal: React.FC<SchemaFormModalProps> = ({
                 }}
               />
             </Form.Item>
-            <Form.Item name="collation" label="排序规则">
+            <Form.Item name="collation" label={t('schemaForm.collationLabel')}>
               <Select options={collationOptions} />
             </Form.Item>
           </>
         )}
 
         {ddl && (
-          <Form.Item label="DDL 预览">
+          <Form.Item label={t('schemaForm.ddlPreview')}>
             <div style={{ border: '1px solid #d9d9d9', borderRadius: 4 }}>
               <Editor
                 height={120}
@@ -251,7 +257,7 @@ const SchemaFormModal: React.FC<SchemaFormModalProps> = ({
 
         {mode === 'edit' && dialectOf(dbType) === 'mysql' && (
           <div style={{ color: '#faad14', fontSize: 12 }}>
-            修改字符集仅影响新建表，不会转换现有表的字符集。
+            {t('schemaForm.charsetWarning')}
           </div>
         )}
       </Form>

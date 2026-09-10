@@ -566,25 +566,46 @@ const TableStructureDrawer: React.FC<Props> = ({
   );
 };
 
+// Index type description mapping for i18n
+const INDEX_TYPE_DESC_MAP: Record<string, string> = {
+  '普通 B-Tree 索引': 'query.idxBTree',
+  '唯一索引': 'query.idxUnique',
+  '唯一 B-Tree 索引': 'query.idxUnique',
+  '位图索引': 'query.idxBitmap',
+  '函数索引': 'query.idxFunction',
+  'B-Tree 索引': 'query.idxBTree',
+  'Hash 索引': 'query.idxHash',
+  'GiST 通用搜索树': 'query.idxGist',
+  'GIN 倒排索引': 'query.idxGin',
+  'SP-GiST 空间分区': 'query.idxSpgist',
+  'BRIN 块范围索引': 'query.idxBrin',
+  '全文索引': 'query.idxFulltext',
+};
+
 // IndexTypeSelect fetches index types from the API based on data source
 const IndexTypeSelect: React.FC<{ dbType: string; dataSourceId: string; value?: string; onChange?: (v: string) => void }> = ({ dbType: _dbType, dataSourceId, value, onChange }) => {
+  const { t } = useTranslation();
   const [types, setTypes] = useState<{ label: string; value: string }[]>([]);
   useEffect(() => {
     if (dataSourceId) {
       dsAPI.indexTypes(dataSourceId).then(res => {
         const data = res.data?.data;
         if (Array.isArray(data) && data.length > 0) {
-          setTypes(data.map((t: any) => ({ label: t.description ? `${t.name} - ${t.description}` : t.name, value: t.name })));
+          setTypes(data.map((item: any) => {
+            const transKey = INDEX_TYPE_DESC_MAP[item.description];
+            const label = transKey ? `${item.name} - ${t(transKey)}` : (item.description ? `${item.name} - ${item.description}` : item.name);
+            return { label, value: item.name };
+          }));
         } else {
           // Fallback defaults
           setTypes([
-            { label: '普通索引', value: 'INDEX' },
-            { label: '唯一索引', value: 'UNIQUE' },
+            { label: t('query.idxBTree'), value: 'INDEX' },
+            { label: t('query.idxUnique'), value: 'UNIQUE' },
           ]);
         }
       }).catch(() => setTypes([{ label: 'INDEX', value: 'INDEX' }, { label: 'UNIQUE', value: 'UNIQUE' }]));
     }
-  }, [dataSourceId]);
+  }, [dataSourceId, t]);
   return <Select options={types} value={value} onChange={onChange} />;
 };
 
