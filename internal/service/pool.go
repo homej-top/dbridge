@@ -347,6 +347,20 @@ func InitPoolManager(cfg PoolConfig, mgrCfg ManagerConfig, perDB map[string]Pool
 		}
 		return globalPoolManager.GetDBConnection(ctx, *ds, pwd)
 	}
+
+	// Set the PooledDBConnector for driver cross-database operations
+	drivers.PooledDBConnector = func(dsType, host string, port int, username, password, database, dsID string) (*sql.DB, error) {
+		ds := repository.DataSource{
+			ID:       dsID,
+			Type:     dsType,
+			Host:     host,
+			Port:     port,
+			Username: username,
+			Password: password,
+			Database: database,
+		}
+		return globalPoolManager.GetDBConnection(context.Background(), ds, password)
+	}
 }
 
 // ShutdownPoolManager shuts down the global pool manager.
@@ -447,6 +461,8 @@ func ConnectDriver(ctx context.Context, ds repository.DataSource, pwd, database 
 		Database:       tmpDS.Database,
 		MaxConnections: 10,
 		DB:             db,
+		DataSourceID:   tmpDS.ID,
+		DataSourceType: tmpDS.Type,
 	}
 
 	// Oracle-specific extra config

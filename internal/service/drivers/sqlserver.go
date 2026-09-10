@@ -61,6 +61,22 @@ func (d *SQLServerDriver) Close() error {
 func (d *SQLServerDriver) DBType() string  { return "sqlserver" }
 func (d *SQLServerDriver) Dialect() string { return "sqlserver" }
 
+// openPooledDB returns a pooled *sql.DB connected to the specified database.
+// Caller must NOT close the returned connection.
+func (d *SQLServerDriver) openPooledDB(database string) (*sql.DB, error) {
+	if PooledDBConnector != nil {
+		return PooledDBConnector(d.cfg.DataSourceType, d.cfg.Host, d.cfg.Port, d.cfg.Username, d.cfg.Password, database, d.cfg.DataSourceID)
+	}
+	log.Println("[WARN] sqlserver: PooledDBConnector not set, falling back to sql.Open")
+	dsn := fmt.Sprintf("sqlserver://%s:%s@%s:%d?database=%s&encrypt=disable",
+		d.cfg.Username, d.cfg.Password, d.cfg.Host, d.cfg.Port, database)
+	db, err := sql.Open("sqlserver", dsn)
+	if err != nil {
+		return nil, err
+	}
+	return db, nil
+}
+
 func (d *SQLServerDriver) useSchema(schema string) error {
 	// SQL Server has no session-level schema switch.
 	// Database context switching is done at connection time.
@@ -1111,17 +1127,9 @@ func (d *SQLServerDriver) ResolveContext(arg string) DatabaseContext {
 }
 
 func (d *SQLServerDriver) ListDatabaseSchemas(database string) ([]string, error) {
-	// Create a new connection to the target database
-	newDsn := fmt.Sprintf("sqlserver://%s:%s@%s:%d?database=%s&encrypt=disable",
-		d.cfg.Username, d.cfg.Password, d.cfg.Host, d.cfg.Port, database)
-	db2, err := sql.Open("sqlserver", newDsn)
+	db2, err := d.openPooledDB(database)
 	if err != nil {
 		return nil, fmt.Errorf("connect to database %s: %w", database, err)
-	}
-	defer db2.Close()
-
-	if err := db2.Ping(); err != nil {
-		return nil, fmt.Errorf("ping database %s: %w", database, err)
 	}
 
 	rows, err := db2.Query(`SELECT name FROM sys.schemas 
@@ -1652,9 +1660,7 @@ func (d *SQLServerDriver) getMappedDatabasesForLogin(loginName string) ([]string
 	}
 
 	for _, dbName := range dbNames {
-		newDsn := fmt.Sprintf("sqlserver://%s:%s@%s:%d?database=%s&encrypt=disable",
-			d.cfg.Username, d.cfg.Password, d.cfg.Host, d.cfg.Port, dbName)
-		db2, err := sql.Open("sqlserver", newDsn)
+		db2, err := d.openPooledDB(dbName)
 		if err != nil {
 			continue
 		}
@@ -1662,7 +1668,6 @@ func (d *SQLServerDriver) getMappedDatabasesForLogin(loginName string) ([]string
 		if db2.QueryRow(`SELECT COUNT(*) FROM sys.database_principals WHERE name = @p1 AND type IN ('S','U')`, loginName).Scan(&cnt) == nil && cnt > 0 {
 			dbs = append(dbs, dbName)
 		}
-		db2.Close()
 	}
 	if dbs == nil {
 		dbs = make([]string, 0)
@@ -1752,13 +1757,10 @@ func (d *SQLServerDriver) createDatabaseUserForLogin(loginName string, m DBUserM
 		schema = "dbo"
 	}
 
-	newDsn := fmt.Sprintf("sqlserver://%s:%s@%s:%d?database=%s&encrypt=disable",
-		d.cfg.Username, d.cfg.Password, d.cfg.Host, d.cfg.Port, m.Database)
-	db2, err := sql.Open("sqlserver", newDsn)
+	db2, err := d.openPooledDB(m.Database)
 	if err != nil {
 		return fmt.Errorf("connect to %s: %w", m.Database, err)
 	}
-	defer db2.Close()
 
 	if _, err := db2.Exec(fmt.Sprintf("CREATE USER [%s] FOR LOGIN [%s] WITH DEFAULT_SCHEMA = [%s]", userName, loginName, schema)); err != nil {
 		return fmt.Errorf("create user: %w", err)
@@ -1806,20 +1808,16 @@ func (d *SQLServerDriver) DropLogin(loginName string, cascadeUsers bool) (*DropL
 	}
 
 	for _, u := range dbUsers {
-		newDsn := fmt.Sprintf("sqlserver://%s:%s@%s:%d?database=%s&encrypt=disable",
-			d.cfg.Username, d.cfg.Password, d.cfg.Host, d.cfg.Port, u.Database)
-		db2, err := sql.Open("sqlserver", newDsn)
+		db2, err := d.openPooledDB(u.Database)
 		if err != nil {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("Cannot connect to %s: %v", u.Database, err))
 			continue
 		}
 		if _, err := db2.Exec(fmt.Sprintf("DROP USER [%s]", u.UserName)); err != nil {
-			db2.Close()
 			result.Warnings = append(result.Warnings, fmt.Sprintf("Drop user [%s].[%s] failed: %v", u.Database, u.UserName, err))
 			continue
 		}
 		result.DroppedUsers = append(result.DroppedUsers, fmt.Sprintf("%s.%s", u.Database, u.UserName))
-		db2.Close()
 	}
 
 	if _, err := d.db.Exec(fmt.Sprintf("DROP LOGIN [%s]", loginName)); err != nil {
@@ -1937,9 +1935,7 @@ func (d *SQLServerDriver) GetLoginDetail(loginName string) (*LoginDetail, error)
 		}
 
 		for _, dbName := range dbNames {
-			newDsn := fmt.Sprintf("sqlserver://%s:%s@%s:%d?database=%s&encrypt=disable",
-				d.cfg.Username, d.cfg.Password, d.cfg.Host, d.cfg.Port, dbName)
-			db2, connErr := sql.Open("sqlserver", newDsn)
+			db2, connErr := d.openPooledDB(dbName)
 			if connErr != nil {
 				continue
 			}
@@ -1948,7 +1944,6 @@ func (d *SQLServerDriver) GetLoginDetail(loginName string) (*LoginDetail, error)
 			userErr := db2.QueryRow(`SELECT name, COALESCE(default_schema_name, 'dbo'), CONVERT(VARCHAR(256), sid, 1) FROM sys.database_principals WHERE name = @p1 AND type IN ('S','U')`, loginName).
 				Scan(&userName, &defaultSchema, &userSID)
 			if userErr != nil {
-				db2.Close()
 				continue
 			}
 
@@ -1959,7 +1954,6 @@ func (d *SQLServerDriver) GetLoginDetail(loginName string) (*LoginDetail, error)
 				IsOrphaned:    loginSID != "" && userSID != "" && !strings.EqualFold(loginSID, userSID),
 			}
 
-			// 查询数据库角色
 			roleRows2, _ := db2.Query(`SELECT r.name FROM sys.database_role_members m JOIN sys.database_principals u ON m.member_principal_id = u.principal_id JOIN sys.database_principals r ON m.role_principal_id = r.principal_id WHERE u.name = @p1`, loginName)
 			if roleRows2 != nil {
 				for roleRows2.Next() {
@@ -1975,7 +1969,6 @@ func (d *SQLServerDriver) GetLoginDetail(loginName string) (*LoginDetail, error)
 			}
 
 			detail.DBUserMappings = append(detail.DBUserMappings, mapping)
-			db2.Close()
 		}
 
 		// 更新 MappedDatabases
@@ -1991,13 +1984,10 @@ func (d *SQLServerDriver) GetLoginDetail(loginName string) (*LoginDetail, error)
 
 // ListDatabaseUsers 列出指定数据库的所有用户
 func (d *SQLServerDriver) ListDatabaseUsers(database string) ([]MSSQLDatabaseUser, error) {
-	newDsn := fmt.Sprintf("sqlserver://%s:%s@%s:%d?database=%s&encrypt=disable",
-		d.cfg.Username, d.cfg.Password, d.cfg.Host, d.cfg.Port, database)
-	db2, err := sql.Open("sqlserver", newDsn)
+	db2, err := d.openPooledDB(database)
 	if err != nil {
 		return nil, fmt.Errorf("connect to database %s: %w", database, err)
 	}
-	defer db2.Close()
 
 	query := `SELECT dp.name, COALESCE(sp.name, ''), dp.type_desc, COALESCE(dp.default_schema_name, 'dbo'),
 		CASE WHEN dp.name IN ('dbo','guest','INFORMATION_SCHEMA','sys') THEN 1 ELSE 0 END,
@@ -2043,13 +2033,10 @@ func (d *SQLServerDriver) ListDatabaseUsers(database string) ([]MSSQLDatabaseUse
 
 // CreateDatabaseUser 在指定数据库中创建用户
 func (d *SQLServerDriver) CreateDatabaseUser(database string, req CreateDBUserRequest) error {
-	newDsn := fmt.Sprintf("sqlserver://%s:%s@%s:%d?database=%s&encrypt=disable",
-		d.cfg.Username, d.cfg.Password, d.cfg.Host, d.cfg.Port, database)
-	db2, err := sql.Open("sqlserver", newDsn)
+	db2, err := d.openPooledDB(database)
 	if err != nil {
 		return fmt.Errorf("connect to %s: %w", database, err)
 	}
-	defer db2.Close()
 
 	schema := req.DefaultSchema
 	if schema == "" {
@@ -2081,13 +2068,10 @@ func (d *SQLServerDriver) DropDatabaseUser(database, userName string) error {
 		return fmt.Errorf("cannot drop 'dbo' user")
 	}
 
-	newDsn := fmt.Sprintf("sqlserver://%s:%s@%s:%d?database=%s&encrypt=disable",
-		d.cfg.Username, d.cfg.Password, d.cfg.Host, d.cfg.Port, database)
-	db2, err := sql.Open("sqlserver", newDsn)
+	db2, err := d.openPooledDB(database)
 	if err != nil {
 		return fmt.Errorf("connect to %s: %w", database, err)
 	}
-	defer db2.Close()
 
 	if _, err := db2.Exec(fmt.Sprintf("DROP USER [%s]", userName)); err != nil {
 		return fmt.Errorf("drop user: %w", err)
@@ -2119,13 +2103,10 @@ func (d *SQLServerDriver) BatchCreateDatabaseUsers(loginName string, mappings []
 
 // DetectOrphanedUsers 检测指定数据库中的孤用用户（含同名 Login 自动匹配）
 func (d *SQLServerDriver) DetectOrphanedUsers(database string) ([]OrphanedUser, error) {
-	newDsn := fmt.Sprintf("sqlserver://%s:%s@%s:%d?database=%s&encrypt=disable",
-		d.cfg.Username, d.cfg.Password, d.cfg.Host, d.cfg.Port, database)
-	db2, err := sql.Open("sqlserver", newDsn)
+	db2, err := d.openPooledDB(database)
 	if err != nil {
 		return nil, fmt.Errorf("connect to %s: %w", database, err)
 	}
-	defer db2.Close()
 
 	query := `SELECT dp.name, DB_NAME(), CONVERT(VARCHAR(256), dp.sid, 1)
 	FROM sys.database_principals dp
@@ -2191,13 +2172,10 @@ func (d *SQLServerDriver) listLoginNames() ([]string, error) {
 
 // FixOrphanedUser 修复孤用用户
 func (d *SQLServerDriver) FixOrphanedUser(database, userName, loginName string) error {
-	newDsn := fmt.Sprintf("sqlserver://%s:%s@%s:%d?database=%s&encrypt=disable",
-		d.cfg.Username, d.cfg.Password, d.cfg.Host, d.cfg.Port, database)
-	db2, err := sql.Open("sqlserver", newDsn)
+	db2, err := d.openPooledDB(database)
 	if err != nil {
 		return fmt.Errorf("connect to %s: %w", database, err)
 	}
-	defer db2.Close()
 
 	if _, err := db2.Exec(fmt.Sprintf("ALTER USER [%s] WITH LOGIN = [%s]", userName, loginName)); err != nil {
 		return fmt.Errorf("fix orphaned user: %w", err)
@@ -2209,13 +2187,10 @@ func (d *SQLServerDriver) FixOrphanedUser(database, userName, loginName string) 
 
 // GetEffectivePermissions 计算指定主体在指定对象上的有效权限
 func (d *SQLServerDriver) GetEffectivePermissions(database, principalName, objectType, objectName string) (*EffectivePermission, error) {
-	newDsn := fmt.Sprintf("sqlserver://%s:%s@%s:%d?database=%s&encrypt=disable",
-		d.cfg.Username, d.cfg.Password, d.cfg.Host, d.cfg.Port, database)
-	db2, err := sql.Open("sqlserver", newDsn)
+	db2, err := d.openPooledDB(database)
 	if err != nil {
 		return nil, fmt.Errorf("connect to %s: %w", database, err)
 	}
-	defer db2.Close()
 
 	result := &EffectivePermission{
 		PrincipalName: principalName,
@@ -2263,13 +2238,10 @@ func (d *SQLServerDriver) GetEffectivePermissions(database, principalName, objec
 
 // CheckGuestStatus 检查 guest 用户状态
 func (d *SQLServerDriver) CheckGuestStatus(database string) (*GuestStatus, error) {
-	newDsn := fmt.Sprintf("sqlserver://%s:%s@%s:%d?database=%s&encrypt=disable",
-		d.cfg.Username, d.cfg.Password, d.cfg.Host, d.cfg.Port, database)
-	db2, err := sql.Open("sqlserver", newDsn)
+	db2, err := d.openPooledDB(database)
 	if err != nil {
 		return nil, fmt.Errorf("connect to %s: %w", database, err)
 	}
-	defer db2.Close()
 
 	gs := &GuestStatus{Database: database}
 
@@ -2293,13 +2265,10 @@ func (d *SQLServerDriver) CheckGuestStatus(database string) (*GuestStatus, error
 
 // DisableGuest 禁用 guest 用户
 func (d *SQLServerDriver) DisableGuest(database string) error {
-	newDsn := fmt.Sprintf("sqlserver://%s:%s@%s:%d?database=%s&encrypt=disable",
-		d.cfg.Username, d.cfg.Password, d.cfg.Host, d.cfg.Port, database)
-	db2, err := sql.Open("sqlserver", newDsn)
+	db2, err := d.openPooledDB(database)
 	if err != nil {
 		return fmt.Errorf("connect to %s: %w", database, err)
 	}
-	defer db2.Close()
 
 	if _, err := db2.Exec("REVOKE CONNECT FROM GUEST"); err != nil {
 		return fmt.Errorf("disable guest: %w", err)

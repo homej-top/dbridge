@@ -72,6 +72,22 @@ func (d *PostgresDriver) Close() error {
 func (d *PostgresDriver) DBType() string  { return "postgres" }
 func (d *PostgresDriver) Dialect() string { return "postgres" }
 
+// openPooledDB returns a pooled *sql.DB connected to the specified database.
+// Caller must NOT close the returned connection.
+func (d *PostgresDriver) openPooledDB(database string) (*sql.DB, error) {
+	if PooledDBConnector != nil {
+		return PooledDBConnector(d.cfg.DataSourceType, d.cfg.Host, d.cfg.Port, d.cfg.Username, d.cfg.Password, database, d.cfg.DataSourceID)
+	}
+	log.Println("[WARN] postgres: PooledDBConnector not set, falling back to sql.Open")
+	dsn := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable connect_timeout=5",
+		d.cfg.Host, d.cfg.Port, d.cfg.Username, d.cfg.Password, database)
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		return nil, err
+	}
+	return db, nil
+}
+
 func (d *PostgresDriver) setSearchPath(schema string) error {
 	if schema == "" {
 		return nil
@@ -1077,17 +1093,9 @@ func (d *PostgresDriver) GetMetrics(ctx context.Context) (map[string]interface{}
 }
 
 func (d *PostgresDriver) ListDatabaseSchemas(database string) ([]string, error) {
-	// Build a new DSN connecting to the target database
-	newDsn := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable connect_timeout=5",
-		d.cfg.Host, d.cfg.Port, d.cfg.Username, d.cfg.Password, database)
-	db2, err := sql.Open("postgres", newDsn)
+	db2, err := d.openPooledDB(database)
 	if err != nil {
 		return nil, fmt.Errorf("connect to database %s: %w", database, err)
-	}
-	defer db2.Close()
-
-	if err := db2.Ping(); err != nil {
-		return nil, fmt.Errorf("ping database %s: %w", database, err)
 	}
 
 	rows, err := db2.Query(`SELECT schema_name FROM information_schema.schemata 

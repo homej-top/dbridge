@@ -195,6 +195,10 @@ type DriverConfig struct {
 	OracleService     string // service name or SID value
 	DB                *sql.DB // pre-built *sql.DB from pool manager (optional)
 
+	// Data source identity for pool tracking
+	DataSourceID   string // data source UUID
+	DataSourceType string // original type: mysql, postgres, oracle, sqlserver, etc.
+
 	// SSH tunnel
 	SSHHost         string
 	SSHPort         int
@@ -212,6 +216,12 @@ type DriverConfig struct {
 	ConnectTimeout int
 	QueryTimeout   int
 }
+
+// PooledDBConnector is injected by the service package to provide pooled *sql.DB
+// connections for cross-database operations within driver methods.
+// Parameters: dsType, host, port, username, password, database, dsID.
+// Returns a pooled *sql.DB. Caller must NOT close it.
+var PooledDBConnector func(dsType, host string, port int, username, password, database, dsID string) (*sql.DB, error)
 
 // ConnectionOptions holds advanced connection settings stored in ExtraConfig JSON.
 type ConnectionOptions struct {
