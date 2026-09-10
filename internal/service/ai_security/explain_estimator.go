@@ -1,17 +1,19 @@
 package ai_security
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/dbridge/dbridge/internal/repository"
-	_ "github.com/microsoft/go-mssqldb"
-	_ "github.com/sijms/go-ora/v2"
 )
+
+// DBConnector is a function that provides a pooled *sql.DB for a given data source.
+// It is set by the service package at init time to avoid circular imports.
+var DBConnector func(ctx context.Context, ds *repository.DataSource) (*sql.DB, error)
 
 // explainResult represents a parsed EXPLAIN output for row estimation
 type explainResult struct {
@@ -28,11 +30,14 @@ func ExplainEstimate(dsID, sql string) (*explainResult, error) {
 		return nil, fmt.Errorf("load datasource: %w", err)
 	}
 
-	db, err := openDBConnection(ds)
+	if DBConnector == nil {
+		return nil, fmt.Errorf("DBConnector not initialized")
+	}
+	db, err := DBConnector(context.Background(), ds)
 	if err != nil {
 		return nil, fmt.Errorf("connect: %w", err)
 	}
-	defer db.Close()
+	// 连接由连接池管理，不关闭
 
 	return executeExplain(db, ds.Type, sql)
 }
@@ -47,42 +52,6 @@ func loadDataSource(dsID string) (*repository.DataSource, error) {
 		return nil, err
 	}
 	return &ds, nil
-}
-
-func openDBConnection(ds *repository.DataSource) (*sql.DB, error) {
-	// Decrypt password
-	pwd, err := decryptPassword(ds.Password)
-	if err != nil {
-		return nil, err
-	}
-
-	var dsn string
-	var driver string
-	switch strings.ToLower(ds.Type) {
-	case "mysql", "mariadb":
-		driver = "mysql"
-		dsn = fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?timeout=5s", ds.Username, pwd, ds.Host, ds.Port, ds.Database)
-	case "postgres", "postgresql":
-		driver = "postgres"
-		dsn = fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable connect_timeout=5", ds.Host, ds.Port, ds.Username, pwd, ds.Database)
-	case "sqlserver", "mssql":
-		driver = "sqlserver"
-		dsn = fmt.Sprintf("sqlserver://%s:%s@%s:%d?database=%s&encrypt=disable", ds.Username, pwd, ds.Host, ds.Port, ds.Database)
-	case "oracle":
-		driver = "oracle"
-		extra := parseOracleExtra(ds.ExtraConfig)
-		dsn = fmt.Sprintf("oracle://%s:%s@%s:%d/%s", ds.Username, pwd, ds.Host, ds.Port, extra.Service)
-	default:
-		return nil, fmt.Errorf("unsupported: %s", ds.Type)
-	}
-
-	db, err := sql.Open(driver, dsn)
-	if err != nil {
-		return nil, err
-	}
-	db.SetMaxOpenConns(1)
-	db.SetConnMaxLifetime(30 * time.Second)
-	return db, nil
 }
 
 func executeExplain(db *sql.DB, dbType, sql string) (*explainResult, error) {
@@ -234,17 +203,4 @@ func parseRowCount(v interface{}) int64 {
 		}
 	}
 	return -1
-}
-
-func parseOracleExtra(raw string) struct{ Service string } {
-	var result struct{ Service string }
-	json.Unmarshal([]byte(raw), &result)
-	return result
-}
-
-// decryptPassword decrypts password. Reuses the crypto module if available.
-func decryptPassword(encrypted string) (string, error) {
-	// Try the shared crypto module from pkg/crypto
-	// For now, return the value as-is since the datasource service decrypts internally
-	return encrypted, nil
 }

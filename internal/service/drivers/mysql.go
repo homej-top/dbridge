@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
 	"time"
@@ -42,6 +43,7 @@ func NewMySQLDriver(cfg DriverConfig) (DatabaseDriver, *sql.DB, error) {
 
 	// Only ping if NOT pooled (pool manager already validated)
 	if cfg.DB == nil {
+		log.Println("[WARN] mysql: cfg.DB is nil, using standalone connection instead of pool")
 		if err := db.Ping(); err != nil {
 			db.Close()
 			return nil, nil, fmt.Errorf("mysql connection failed: %w", err)

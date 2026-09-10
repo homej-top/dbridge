@@ -55,7 +55,7 @@ type TableStructureResult struct {
 	DDL     string         `json:"ddl"`
 }
 
-func (s *CompareService) connectToDS(dsID string, database ...string) (*sql.DB, repository.DataSource, error) {
+func (s *CompareService) connectToDS(ctx context.Context, dsID string, database ...string) (*sql.DB, repository.DataSource, error) {
 	var ds repository.DataSource
 	if err := s.db.Where("id = ?", dsID).First(&ds).Error; err != nil {
 		return nil, ds, fmt.Errorf("data source not found: %s", dsID)
@@ -66,7 +66,7 @@ func (s *CompareService) connectToDS(dsID string, database ...string) (*sql.DB, 
 		return nil, ds, fmt.Errorf("failed to decrypt password")
 	}
 
-	if !isSupportedDBType(ds.Type) {
+	if driverNameOf(ds.Type) == "" {
 		return nil, ds, fmt.Errorf("unsupported database type: %s", ds.Type)
 	}
 
@@ -75,7 +75,7 @@ func (s *CompareService) connectToDS(dsID string, database ...string) (*sql.DB, 
 		ds.Database = database[0]
 	}
 
-	conn, err := openDBConn(ds, pwd)
+	conn, err := PoolManager().GetDBConnection(ctx, ds, pwd)
 	if err != nil {
 		return nil, ds, err
 	}
@@ -131,17 +131,15 @@ func (s *CompareService) connectDriverWithDB(dsID, database string) (drivers.Dat
 }
 
 func (s *CompareService) CompareStructures(sourceDSID, sourceSchema, sourceDatabase, targetDSID, targetSchema, targetDatabase string) ([]CompareObject, error) {
-	sourceConn, sourceDS, err := s.connectToDS(sourceDSID)
+	_, sourceDS, err := s.connectToDS(context.Background(), sourceDSID)
 	if err != nil {
 		return nil, fmt.Errorf("source: %w", err)
 	}
-	defer sourceConn.Close()
 
-	targetConn, targetDS, err := s.connectToDS(targetDSID)
+	_, targetDS, err := s.connectToDS(context.Background(), targetDSID)
 	if err != nil {
 		return nil, fmt.Errorf("target: %w", err)
 	}
-	defer targetConn.Close()
 
 	// Use explicit database override if provided (for PG/SQL Server with 3-level structure)
 	srcDB := sourceDatabase
@@ -210,11 +208,11 @@ func (s *CompareService) CompareStructures(sourceDSID, sourceSchema, sourceDatab
 }
 
 func (s *CompareService) GetTableData(dsID, schemaName, tableName string, page, pageSize int) (*TableDataResult, error) {
-	conn, ds, err := s.connectToDS(dsID)
+	conn, ds, err := s.connectToDS(context.Background(), dsID)
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
+	// 连接由连接池管理，不关闭
 
 	if page < 1 {
 		page = 1
@@ -395,17 +393,17 @@ type DataSyncResult struct {
 }
 
 func (s *CompareService) SyncStructure(req SyncStructureRequest) (*SyncStructureResult, error) {
-	sourceConn, sourceDS, err := s.connectToDS(req.SourceDS, req.SourceDatabase)
+	sourceConn, sourceDS, err := s.connectToDS(context.Background(), req.SourceDS, req.SourceDatabase)
 	if err != nil {
 		return nil, fmt.Errorf("source: %w", err)
 	}
-	defer sourceConn.Close()
+	// 连接由连接池管理，不关闭
 
-	targetConn, targetDS, err := s.connectToDS(req.TargetDS, req.TargetDatabase)
+	targetConn, targetDS, err := s.connectToDS(context.Background(), req.TargetDS, req.TargetDatabase)
 	if err != nil {
 		return nil, fmt.Errorf("target: %w", err)
 	}
-	defer targetConn.Close()
+	// 连接由连接池管理，不关闭
 
 	sourceSchema := req.SourceSchema
 	if sourceSchema == "" {
@@ -841,17 +839,17 @@ func (s *CompareService) generateCrossDBCreateDDL(cols []ColumnDetail, table str
 }
 
 func (s *CompareService) SyncData(req SyncDataRequest) (*DataSyncResult, error) {
-	sourceConn, sourceDS, err := s.connectToDS(req.SourceDS, req.SourceDatabase)
+	sourceConn, sourceDS, err := s.connectToDS(context.Background(), req.SourceDS, req.SourceDatabase)
 	if err != nil {
 		return nil, fmt.Errorf("source: %w", err)
 	}
-	defer sourceConn.Close()
+	// 连接由连接池管理，不关闭
 
-	targetConn, targetDS, err := s.connectToDS(req.TargetDS, req.TargetDatabase)
+	targetConn, targetDS, err := s.connectToDS(context.Background(), req.TargetDS, req.TargetDatabase)
 	if err != nil {
 		return nil, fmt.Errorf("target: %w", err)
 	}
-	defer targetConn.Close()
+	// 连接由连接池管理，不关闭
 
 	sourceSchema := req.SourceSchema
 	if sourceSchema == "" {

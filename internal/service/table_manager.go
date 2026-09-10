@@ -97,7 +97,7 @@ var systemDBBlacklist = map[string]bool{
 	"pg_temp_1": true,
 }
 
-func (s *TableManagerService) connectToDS(dsID string) (*sql.DB, repository.DataSource, error) {
+func (s *TableManagerService) connectToDS(ctx context.Context, dsID string) (*sql.DB, repository.DataSource, error) {
 	var ds repository.DataSource
 	if err := s.db.Where("id = ?", dsID).First(&ds).Error; err != nil {
 		return nil, ds, fmt.Errorf("data source not found: %s", dsID)
@@ -106,7 +106,7 @@ func (s *TableManagerService) connectToDS(dsID string) (*sql.DB, repository.Data
 	if err != nil {
 		return nil, ds, fmt.Errorf("failed to decrypt password")
 	}
-	conn, err := openDBConn(ds, pwd)
+	conn, err := PoolManager().GetDBConnection(ctx, ds, pwd)
 	if err != nil {
 		return nil, ds, err
 	}
@@ -256,27 +256,24 @@ func (s *TableManagerService) ExecuteAlter(req AlterRequest, operator, userID, t
 	}
 
 	start := time.Now()
-	conn, ds, err := s.connectToDS(req.DataSourceID)
+	conn, ds, err := s.connectToDS(context.Background(), req.DataSourceID)
 	if err != nil {
 		return nil, err
 	}
+	// 连接由连接池管理，不关闭
 
-	// If a different database is requested, reconnect to it
+	// If a different database is requested, get a connection to it via the pool
 	if req.Database != "" && req.Database != ds.Database {
-		conn.Close()
 		var pwd string
 		pwd, err = cryptoPkg.Decrypt(ds.Password)
 		if err != nil {
 			return nil, fmt.Errorf("failed to decrypt password: %w", err)
 		}
 		ds.Database = req.Database
-		conn, err = openDBConn(ds, pwd)
+		conn, err = PoolManager().GetDBConnection(context.Background(), ds, pwd)
 		if err != nil {
 			return nil, fmt.Errorf("connect to database %s: %w", req.Database, err)
 		}
-		defer conn.Close()
-	} else {
-		defer conn.Close()
 	}
 
 	sch := resolveSchema(ds, req.Schema)

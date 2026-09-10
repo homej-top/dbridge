@@ -4,10 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	_ "github.com/sijms/go-ora/v2"
 )
 
 // OracleDriver implements DatabaseDriver for Oracle databases.
@@ -71,6 +74,7 @@ func NewOracleDriver(cfg DriverConfig) (DatabaseDriver, *sql.DB, error) {
 	}
 
 	if cfg.DB == nil {
+		log.Println("[WARN] oracle: cfg.DB is nil, using standalone connection instead of pool")
 		if err := db.Ping(); err != nil {
 			db.Close()
 			return nil, nil, fmt.Errorf("oracle connection failed: %w", err)

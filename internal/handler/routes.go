@@ -367,4 +367,12 @@ func RegisterRoutes(r *gin.RouterGroup, cfg *config.Config, logger *zap.Logger) 
 	}
 
 	r.GET("/storage-files", chainMW(protectedMW, taskHandler.BrowseStorageFiles)...)
+
+	// Metrics routes (admin only)
+	metricsHandler := NewMetricsHandler()
+	metrics := r.Group("/metrics")
+	metrics.Use(adminMW...)
+	{
+		metrics.GET("/pool", metricsHandler.PoolMetrics)
+	}
 }

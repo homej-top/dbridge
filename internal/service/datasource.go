@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -15,9 +16,6 @@ import (
 	"github.com/dbridge/dbridge/internal/repository"
 	"github.com/dbridge/dbridge/internal/service/drivers"
 	cryptoPkg "github.com/dbridge/dbridge/pkg/crypto"
-
-	_ "github.com/go-sql-driver/mysql"
-	_ "github.com/lib/pq"
 	"gorm.io/gorm"
 )
 
@@ -391,7 +389,7 @@ func (s *DataSourceService) Delete(id, tenantID string) error {
 // TestConnection tests database connectivity without saving
 func (s *DataSourceService) TestConnection(input CreateDSInput) (string, error) {
 	// Validate type against allowlist to prevent driver injection
-	if !isSupportedDBType(input.Type) {
+	if driverNameOf(input.Type) == "" {
 		return "", fmt.Errorf("unsupported database type for test: %s", input.Type)
 	}
 
@@ -406,11 +404,11 @@ func (s *DataSourceService) TestConnection(input CreateDSInput) (string, error) 
 		Username:    input.Username,
 		ExtraConfig: input.ExtraConfig,
 	}
-	db, err := s.openDBConnection(ds, input.Password)
+	db, err := PoolManager().GetDBConnection(context.Background(), ds, input.Password)
 	if err != nil {
 		return "", err
 	}
-	defer db.Close()
+	_ = db // 连接由连接池管理，不关闭
 
 	return "connected", nil
 }
@@ -442,7 +440,7 @@ func (s *DataSourceService) connectDriver(id string) (drivers.DatabaseDriver, *s
 	if err := s.db.Where("id = ?", id).First(&ds).Error; err != nil {
 		return nil, nil, nil, fmt.Errorf("data source not found")
 	}
-	if !isSupportedDBType(ds.Type) {
+	if driverNameOf(ds.Type) == "" {
 		return nil, nil, nil, fmt.Errorf("unsupported database type: %s", ds.Type)
 	}
 	var pwd string
@@ -556,7 +554,7 @@ func (s *DataSourceService) connectDriverForDB(id, database string) (drivers.Dat
 		return nil, nil, fmt.Errorf("failed to decrypt password")
 	}
 
-	if !isSupportedDBType(ds.Type) {
+	if driverNameOf(ds.Type) == "" {
 		return nil, nil, fmt.Errorf("unsupported database type: %s", ds.Type)
 	}
 
@@ -624,11 +622,6 @@ func (s *DataSourceService) connectDriverForDB(id, database string) (drivers.Dat
 
 	driver, db, err := drivers.CreateDriver(ds.Type, cfg)
 	return driver, db, err
-}
-
-// openDBConnection is a thin wrapper for backward compatibility
-func (s *DataSourceService) openDBConnection(ds repository.DataSource, pwd string) (*sql.DB, error) {
-	return openDBConn(ds, pwd)
 }
 
 // ListSchemaNames returns only the schema/database names for a data source (no tables/views)

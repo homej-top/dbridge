@@ -35,6 +35,7 @@ type ServerConfig struct {
 
 type DatabaseConfig struct {
 	Type       string             `mapstructure:"type"`
+	UsePool    bool               `mapstructure:"use_pool"`
 	MySQL      MySQLConfig        `mapstructure:"mysql"`
 	PostgreSQL PostgreSQLConfig   `mapstructure:"postgresql"`
 	SQLite     SQLiteConfig       `mapstructure:"sqlite"`
@@ -192,6 +193,9 @@ func LoadConfig(configPath string) (*Config, error) {
 	v.BindEnv("jwt.secret", "DBRIDGE_JWT_SECRET")
 	v.BindEnv("crypto.key_id", "DBRIDGE_CRYPTO_KEY")
 
+	// 连接池灰度开关默认为 true
+	v.SetDefault("database.use_pool", true)
+
 	if err := v.ReadInConfig(); err != nil {
 		return nil, err
 	}
@@ -223,6 +227,18 @@ func (c *Config) Validate() []string {
 
 	// Storage config validation
 	warnings = append(warnings, c.Storage.Validate()...)
+
+	// Pool config validation
+	if c.Database.MySQL.MaxIdleConns > c.Database.MySQL.MaxOpenConns && c.Database.MySQL.MaxOpenConns > 0 {
+		warnings = append(warnings, fmt.Sprintf("MySQL max_idle_conns (%d) > max_open_conns (%d)，已自动调整",
+			c.Database.MySQL.MaxIdleConns, c.Database.MySQL.MaxOpenConns))
+		c.Database.MySQL.MaxIdleConns = c.Database.MySQL.MaxOpenConns
+	}
+	if c.Database.PostgreSQL.MaxIdleConns > c.Database.PostgreSQL.MaxOpenConns && c.Database.PostgreSQL.MaxOpenConns > 0 {
+		warnings = append(warnings, fmt.Sprintf("PostgreSQL max_idle_conns (%d) > max_open_conns (%d)，已自动调整",
+			c.Database.PostgreSQL.MaxIdleConns, c.Database.PostgreSQL.MaxOpenConns))
+		c.Database.PostgreSQL.MaxIdleConns = c.Database.PostgreSQL.MaxOpenConns
+	}
 
 	return warnings
 }

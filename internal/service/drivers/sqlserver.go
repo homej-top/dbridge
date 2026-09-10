@@ -4,18 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
 	"time"
 
-	// go-mssqldb - official Microsoft SQL Server driver
-	// Add to go.mod:
-	//   require github.com/microsoft/go-mssqldb v1.7.2
-	// Blank import registers the "sqlserver" driver:
-	//   _ "github.com/microsoft/go-mssqldb"
-	//
-	// Connection string format:
-	//   sqlserver://user:pass@host:port?database=dbname
+	_ "github.com/microsoft/go-mssqldb"
 )
 
 // SQLServerDriver implements DatabaseDriver for SQL Server
@@ -47,6 +41,7 @@ func NewSQLServerDriver(cfg DriverConfig) (DatabaseDriver, *sql.DB, error) {
 	}
 
 	if cfg.DB == nil {
+		log.Println("[WARN] sqlserver: cfg.DB is nil, using standalone connection instead of pool")
 		if err := db.Ping(); err != nil {
 			db.Close()
 			return nil, nil, fmt.Errorf("sqlserver connection failed: %w", err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
 	"time"
@@ -45,6 +46,7 @@ func NewPostgresDriver(cfg DriverConfig) (DatabaseDriver, *sql.DB, error) {
 	}
 
 	if cfg.DB == nil {
+		log.Println("[WARN] postgres: cfg.DB is nil, using standalone connection instead of pool")
 		if err := db.Ping(); err != nil {
 			db.Close()
 			return nil, nil, fmt.Errorf("postgres connection failed: %w", err)

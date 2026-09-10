@@ -9,12 +9,13 @@ import (
 	"net/url"
 	"sync"
 
-	_ "modernc.org/sqlite"
 	"sync/atomic"
 	"time"
 
 	"github.com/dbridge/dbridge/internal/repository"
+	"github.com/dbridge/dbridge/internal/service/ai_security"
 	"github.com/dbridge/dbridge/internal/service/drivers"
+	cryptoPkg "github.com/dbridge/dbridge/pkg/crypto"
 	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
 )
@@ -40,27 +41,37 @@ type ManagerConfig struct {
 
 // PoolEntry is a cached *sql.DB instance.
 type PoolEntry struct {
-	DB       *sql.DB
-	Driver   string
-	LastUsed time.Time
-	PoolKey  string
+	DB            *sql.DB
+	Driver        string
+	LastUsed      time.Time
+	PoolKey       string
+	HitCount      atomic.Int64 // 该池命中次数
+	MissCount     atomic.Int64 // 该池未命中次数（仅首次创建时 +1）
+	DataSourceIDs []string     // 使用该池的数据源 ID 列表
 }
 
 // PoolStat exposes runtime metrics for a single pool.
 type PoolStat struct {
-	PoolKey      string `json:"pool_key"`
-	Driver       string `json:"driver"`
-	LastUsed     string `json:"last_used"`
-	OpenConns    int    `json:"open_conns"`
-	InUse        int    `json:"in_use"`
-	Idle         int    `json:"idle"`
-	WaitCount    int64  `json:"wait_count"`
-	WaitDuration string `json:"wait_duration"`
+	PoolKey       string   `json:"pool_key"`
+	Driver        string   `json:"driver"`
+	DataSourceIDs []string `json:"data_source_ids"`
+	LastUsed      string   `json:"last_used"`
+	OpenConns     int      `json:"open_conns"`
+	InUse         int      `json:"in_use"`
+	Idle          int      `json:"idle"`
+	WaitCount     int64    `json:"wait_count"`
+	WaitDuration  string   `json:"wait_duration"`
+	HitCount      int64    `json:"hit_count"`
+	MissCount     int64    `json:"miss_count"`
+	HitRate       float64  `json:"hit_rate"`
 }
 
 // PoolManagerStats is the top-level stats payload.
 type PoolManagerStats struct {
 	TotalPools int                 `json:"total_pools"`
+	HitCount   int64               `json:"hit_count"`
+	MissCount  int64               `json:"miss_count"`
+	HitRate    float64             `json:"hit_rate"`
 	Pools      map[string]PoolStat `json:"pools"`
 }
 
@@ -68,16 +79,18 @@ type PoolManagerStats struct {
 // providing reuse across requests. It does not manage individual TCP
 // connections — that is handled by database/sql.
 type ConnectionPoolManager struct {
-	mu       sync.RWMutex
-	pools    map[string]*PoolEntry
-	sf       singleflight.Group
-	cfg      PoolConfig
-	mgrCfg   ManagerConfig
-	perDB    map[string]PoolConfig
-	logger   *zap.Logger
-	stopCh   chan struct{}
-	stopOnce sync.Once
-	shutdown atomic.Bool
+	mu        sync.RWMutex
+	pools     map[string]*PoolEntry
+	sf        singleflight.Group
+	cfg       PoolConfig
+	mgrCfg    ManagerConfig
+	perDB     map[string]PoolConfig
+	logger    *zap.Logger
+	stopCh    chan struct{}
+	stopOnce  sync.Once
+	shutdown  atomic.Bool
+	hitCount  atomic.Int64 // 全局命中次数
+	missCount atomic.Int64 // 全局未命中次数
 }
 
 // NewConnectionPoolManager creates the manager and starts the cleanup loop.
@@ -115,10 +128,15 @@ func (m *ConnectionPoolManager) GetWithContext(ctx context.Context, poolKey, dri
 	entry, exists := m.pools[poolKey]
 	m.mu.RUnlock()
 	if exists {
+		entry.HitCount.Add(1)
+		m.hitCount.Add(1)
 		entry.LastUsed = time.Now()
 		m.logger.Debug("pool cache hit", zap.String("poolKey", poolKey))
 		return entry.DB, nil
 	}
+
+	// cache miss
+	m.missCount.Add(1)
 
 	m.logger.Info("pool cache miss, creating new pool",
 		zap.String("driver", driverName),
@@ -173,12 +191,14 @@ func (m *ConnectionPoolManager) GetWithContext(ctx context.Context, poolKey, dri
 			zap.String("poolKey", poolKey))
 
 		m.mu.Lock()
-		m.pools[poolKey] = &PoolEntry{
+		newEntry := &PoolEntry{
 			DB:       db,
 			Driver:   driverName,
 			LastUsed: time.Now(),
 			PoolKey:  poolKey,
 		}
+		newEntry.MissCount.Add(1) // 首次创建，单池未命中 +1
+		m.pools[poolKey] = newEntry
 		m.mu.Unlock()
 		return db, nil
 	})
@@ -211,21 +231,47 @@ func (m *ConnectionPoolManager) Evict(poolKey string) {
 func (m *ConnectionPoolManager) Stats() PoolManagerStats {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+
+	hit := m.hitCount.Load()
+	miss := m.missCount.Load()
+	total := hit + miss
+	rate := 0.0
+	if total > 0 {
+		rate = float64(hit) / float64(total)
+	}
+
 	pools := make(map[string]PoolStat, len(m.pools))
 	for k, e := range m.pools {
 		s := e.DB.Stats()
+		eHit := e.HitCount.Load()
+		eMiss := e.MissCount.Load()
+		eTotal := eHit + eMiss
+		eRate := 0.0
+		if eTotal > 0 {
+			eRate = float64(eHit) / float64(eTotal)
+		}
 		pools[k] = PoolStat{
-			PoolKey:      k,
-			Driver:       e.Driver,
-			LastUsed:     e.LastUsed.UTC().Format(time.RFC3339),
-			OpenConns:    s.OpenConnections,
-			InUse:        s.InUse,
-			Idle:         s.Idle,
-			WaitCount:    s.WaitCount,
-			WaitDuration: s.WaitDuration.String(),
+			PoolKey:       k,
+			Driver:        e.Driver,
+			DataSourceIDs: e.DataSourceIDs,
+			LastUsed:      e.LastUsed.UTC().Format(time.RFC3339),
+			OpenConns:     s.OpenConnections,
+			InUse:         s.InUse,
+			Idle:          s.Idle,
+			WaitCount:     s.WaitCount,
+			WaitDuration:  s.WaitDuration.String(),
+			HitCount:      eHit,
+			MissCount:     eMiss,
+			HitRate:       eRate,
 		}
 	}
-	return PoolManagerStats{TotalPools: len(pools), Pools: pools}
+	return PoolManagerStats{
+		TotalPools: len(pools),
+		HitCount:   hit,
+		MissCount:  miss,
+		HitRate:    rate,
+		Pools:      pools,
+	}
 }
 
 // Shutdown closes all cached pools and stops the cleanup loop.
@@ -292,6 +338,15 @@ var globalPoolManager *ConnectionPoolManager
 // InitPoolManager creates the global pool manager. Call once during startup.
 func InitPoolManager(cfg PoolConfig, mgrCfg ManagerConfig, perDB map[string]PoolConfig, logger *zap.Logger) {
 	globalPoolManager = NewConnectionPoolManager(cfg, mgrCfg, perDB, logger)
+
+	// Set the DBConnector for ai_security package to avoid circular imports
+	ai_security.DBConnector = func(ctx context.Context, ds *repository.DataSource) (*sql.DB, error) {
+		pwd, err := cryptoPkg.Decrypt(ds.Password)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt password: %w", err)
+		}
+		return globalPoolManager.GetDBConnection(ctx, *ds, pwd)
+	}
 }
 
 // ShutdownPoolManager shuts down the global pool manager.
@@ -382,6 +437,7 @@ func ConnectDriver(ctx context.Context, ds repository.DataSource, pwd, database 
 	if err != nil {
 		return nil, fmt.Errorf("acquire connection pool: %w", err)
 	}
+	globalPoolManager.trackDataSourceID(poolKey, tmpDS.ID)
 
 	cfg := drivers.DriverConfig{
 		Host:           tmpDS.Host,
@@ -411,4 +467,51 @@ func ConnectDriver(ctx context.Context, ds repository.DataSource, pwd, database 
 
 	driver, _, err := drivers.CreateDriver(tmpDS.Type, cfg)
 	return driver, err
+}
+
+// GetDBConnection returns a pooled *sql.DB for the given data source.
+// Unlike ConnectDriver, it returns the raw *sql.DB rather than a DatabaseDriver,
+// suitable for callers that only need to execute raw SQL (compare, table_manager, etc.).
+func (m *ConnectionPoolManager) GetDBConnection(ctx context.Context, ds repository.DataSource, pwd string) (*sql.DB, error) {
+	dsn := BuildDSN(ds, pwd)
+	driverName := driverNameOf(ds.Type)
+	if driverName == "" {
+		return nil, fmt.Errorf("unsupported database type: %s", ds.Type)
+	}
+	poolKey := PoolKey(driverName, dsn)
+	db, err := m.GetWithContext(ctx, poolKey, driverName, dsn)
+	if err != nil {
+		return nil, err
+	}
+	m.trackDataSourceID(poolKey, ds.ID)
+	return db, nil
+}
+
+// trackDataSourceID records the association between a pool and a data source ID.
+func (m *ConnectionPoolManager) trackDataSourceID(poolKey, dsID string) {
+	if dsID == "" {
+		return
+	}
+	m.mu.RLock()
+	entry, exists := m.pools[poolKey]
+	m.mu.RUnlock()
+	if !exists {
+		return
+	}
+	for _, id := range entry.DataSourceIDs {
+		if id == dsID {
+			return // already tracked
+		}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// Double-check under write lock
+	if entry, ok := m.pools[poolKey]; ok {
+		for _, id := range entry.DataSourceIDs {
+			if id == dsID {
+				return
+			}
+		}
+		entry.DataSourceIDs = append(entry.DataSourceIDs, dsID)
+	}
 }

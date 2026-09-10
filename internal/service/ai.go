@@ -162,7 +162,7 @@ func (s *AIService) OptimizeSQL(ctx context.Context, req SQLRequest) (*AIRespons
 
 	explainResult := ""
 	if req.DataSourceID != "" {
-		explainResult, _ = s.getExplainResult(req.DataSourceID, req.Schema, req.SQL)
+		explainResult, _ = s.getExplainResult(ctx, req.DataSourceID, req.Schema, req.SQL)
 	}
 
 	prompt := "你是一个数据库性能优化专家。请分析以下 SQL 语句，给出优化建议。\n\n要求：\n1. 指出当前 SQL 的性能问题\n2. 给出优化后的 SQL\n3. 解释优化的原因和预期效果\n"
@@ -195,7 +195,7 @@ func (s *AIService) FixSQL(ctx context.Context, req FixRequest) (*AIResponse, er
 		return nil, fmt.Errorf("SQL 过长")
 	}
 
-	schemaCtx, _ := s.buildSchemaContext(req.DataSourceID, req.Schema)
+	schemaCtx, _ := s.buildSchemaContext(ctx, req.DataSourceID, req.Schema)
 
 	messages := []Message{
 		{Role: "system", Content: fmt.Sprintf("你是一个数据库专家。请根据错误信息修复 SQL 语句。\n仅输出修正后的 SQL 和简要解释。\n\n%s", schemaCtx)},
@@ -214,7 +214,7 @@ func (s *AIService) FixSQL(ctx context.Context, req FixRequest) (*AIResponse, er
 	return resp, nil
 }
 
-func (s *AIService) buildSchemaContext(dataSourceID, schema string) (string, error) {
+func (s *AIService) buildSchemaContext(ctx context.Context, dataSourceID, schema string) (string, error) {
 	if dataSourceID == "" {
 		return "", nil
 	}
@@ -229,11 +229,11 @@ func (s *AIService) buildSchemaContext(dataSourceID, schema string) (string, err
 		return "", err
 	}
 
-	conn, err := s.connectDS(ds, pwd)
+	conn, err := s.connectDS(ctx, ds, pwd)
 	if err != nil {
 		return "", err
 	}
-	defer conn.Close()
+	// 连接由连接池管理，不关闭
 
 	if schema != "" && ds.Type == "mysql" && ds.Database == "" {
 		if err := validateSchemaName(schema); err != nil {
@@ -516,11 +516,11 @@ func (s *AIService) callLLM(ctx context.Context, messages []Message) (string, er
 	return result.Choices[0].Message.Content, nil
 }
 
-func (s *AIService) connectDS(ds repository.DataSource, pwd string) (*sql.DB, error) {
-	return openDBConn(ds, pwd)
+func (s *AIService) connectDS(ctx context.Context, ds repository.DataSource, pwd string) (*sql.DB, error) {
+	return PoolManager().GetDBConnection(ctx, ds, pwd)
 }
 
-func (s *AIService) getExplainResult(dataSourceID, schema, query string) (string, error) {
+func (s *AIService) getExplainResult(ctx context.Context, dataSourceID, schema, query string) (string, error) {
 	trimmed := strings.TrimSpace(query)
 	upper := strings.ToUpper(trimmed)
 	if !strings.HasPrefix(upper, "SELECT") && !strings.HasPrefix(upper, "WITH") {
@@ -540,11 +540,11 @@ func (s *AIService) getExplainResult(dataSourceID, schema, query string) (string
 		return "", err
 	}
 
-	conn, err := s.connectDS(ds, pwd)
+	conn, err := s.connectDS(ctx, ds, pwd)
 	if err != nil {
 		return "", err
 	}
-	defer conn.Close()
+	// 连接由连接池管理，不关闭
 
 	if schema != "" && ds.Type == "mysql" && ds.Database == "" {
 		if err := validateSchemaName(schema); err != nil {
