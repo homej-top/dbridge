@@ -468,6 +468,8 @@ func (s *DataSourceService) buildDriver(ds repository.DataSource, pwd string) (d
 		Password:       pwd,
 		Database:       ds.Database,
 		MaxConnections: 10,
+		DataSourceType: ds.Type,
+		DataSourceID:   ds.ID,
 	}
 
 	if ds.ExtraConfig != "" {
@@ -566,6 +568,8 @@ func (s *DataSourceService) connectDriverForDB(id, database string) (drivers.Dat
 		Password:       pwd,
 		Database:       database,
 		MaxConnections: 10,
+		DataSourceType: ds.Type,
+		DataSourceID:   ds.ID,
 	}
 
 	if ds.ExtraConfig != "" {

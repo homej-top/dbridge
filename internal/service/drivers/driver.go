@@ -1067,10 +1067,54 @@ func IsSelectStatement(sql string) bool {
 		strings.HasPrefix(lower, "with ")
 }
 
+// StripSQLComments removes SQL comments from the beginning of a statement.
+// Handles both single-line (-- comment) and multi-line (/* comment */) comments.
+func StripSQLComments(sql string) string {
+	sql = strings.TrimSpace(sql)
+	
+	// Remove leading single-line comments (-- ...)
+	for strings.HasPrefix(sql, "--") {
+		// Find the end of the line
+		idx := strings.Index(sql, "\n")
+		if idx == -1 {
+			// No newline, entire string is a comment
+			return ""
+		}
+		// Skip the comment line and continue
+		sql = strings.TrimSpace(sql[idx+1:])
+	}
+	
+	// Remove leading multi-line comments (/* ... */)
+	for strings.HasPrefix(sql, "/*") {
+		endIdx := strings.Index(sql, "*/")
+		if endIdx == -1 {
+			// Unclosed comment, treat as empty
+			return ""
+		}
+		// Skip past the closing */
+		sql = strings.TrimSpace(sql[endIdx+2:])
+		// After removing /* */, check for more -- comments
+		for strings.HasPrefix(sql, "--") {
+			idx := strings.Index(sql, "\n")
+			if idx == -1 {
+				return ""
+			}
+			sql = strings.TrimSpace(sql[idx+1:])
+		}
+	}
+	
+	return sql
+}
+
 // MayReturnResultSet checks if a SQL statement may return a result set.
 // This is a conservative check - when in doubt, assume it might return results.
 func MayReturnResultSet(sql string) bool {
-	lower := strings.ToLower(strings.TrimSpace(sql))
+	// Strip comments before checking
+	cleanedSQL := StripSQLComments(sql)
+	if cleanedSQL == "" {
+		return false
+	}
+	lower := strings.ToLower(cleanedSQL)
 
 	// Standard SELECT-like statements
 	if strings.HasPrefix(lower, "select") ||

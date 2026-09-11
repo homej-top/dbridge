@@ -13,6 +13,7 @@ import (
 	"github.com/homej-top/dbridge/internal/model"
 	"github.com/homej-top/dbridge/internal/repository"
 	"github.com/homej-top/dbridge/internal/service"
+	"github.com/homej-top/dbridge/internal/service/drivers"
 	"go.uber.org/zap"
 )
 
@@ -177,7 +178,12 @@ func (h *QueryHandler) GetDDL(c *gin.Context) {
 
 // classifySQL returns the SQL category: ddl, dml, dql, dcl, tcl
 func classifySQL(sql string) string {
-	upper := strings.ToUpper(strings.TrimSpace(sql))
+	// Strip comments before classifying
+	cleanedSQL := drivers.StripSQLComments(sql)
+	if cleanedSQL == "" {
+		return "dql" // default to DQL for empty/comment-only SQL
+	}
+	upper := strings.ToUpper(cleanedSQL)
 	if strings.HasPrefix(upper, "SELECT") || strings.HasPrefix(upper, "SHOW") ||
 		strings.HasPrefix(upper, "DESCRIBE") || strings.HasPrefix(upper, "DESC") ||
 		strings.HasPrefix(upper, "EXPLAIN") || strings.HasPrefix(upper, "WITH") {
