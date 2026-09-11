@@ -59,6 +59,9 @@ request.interceptors.response.use(
     return response;
   },
   (error) => {
+    // Extract error message from response data if available
+    const errorMessage = error.response?.data?.message || error.message || '网络错误';
+    
     if (error.response?.status === 401) {
       localStorage.removeItem('token');
       window.location.href = '/login';
@@ -90,15 +93,16 @@ request.interceptors.response.use(
       } else if (data?.code === 1006) {
         // device_limit_reached — handled by AuthCallback, no toast here
       } else {
-        message.error('权限不足');
+        message.error(errorMessage);
       }
       return Promise.reject(error);
     }
     if (error.response?.status === 503) {
-      message.error('服务不可用');
+      message.error(errorMessage);
       return Promise.reject(error);
     }
-    message.error(error.message || '网络错误');
+    // For all other HTTP errors (400, 500, etc.), show the backend message
+    message.error(errorMessage);
     return Promise.reject(error);
   }
 );
