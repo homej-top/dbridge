@@ -812,10 +812,14 @@ const SQLEditor: React.FC = () => {
         const tab = tabsRef.current.find((x) => x.id === id) as TableTab | undefined;
         if (tab) {
           const sql = buildTableSQL(tab);
-          executeQuery(sql, schema, 1, 20, database, ds).then((result) => {
-            const totalRows = result?.total_rows || 0;
-            updateTab(id, { result, page: 1, pageSize: 20, loading: false, totalRows });
-          });
+          executeQuery(sql, schema, 1, 20, database, ds)
+            .then((result) => {
+              const totalRows = result?.total_rows || 0;
+              updateTab(id, { result, page: 1, pageSize: 20, loading: false, totalRows });
+            })
+            .catch(() => {
+              updateTab(id, { loading: false });
+            });
         }
       }, 0);
     };
@@ -1716,6 +1720,38 @@ const SQLEditor: React.FC = () => {
     );
   };
 
+  // Memoize tab items to avoid recreating on every render
+  const tabItems = useMemo(() => tabs.map((tab) => {
+    // Build tooltip showing data source > database > schema
+    let tooltipText = tab.title;
+    const tabDsId = (tab as any).dsId;
+    const tabDb = (tab as any).database;
+    const tabSch = (tab as any).schema;
+    if (tabDsId) {
+      const dsInfo = dataSources.find(d => d.id === tabDsId);
+      if (dsInfo) {
+        tooltipText = dsInfo.name;
+        if (tabDb) tooltipText += ` > ${tabDb}`;
+        if (tabSch) tooltipText += ` > ${tabSch}`;
+      }
+    }
+    return { key: tab.id,
+    label: (
+      <Tooltip title={tooltipText}>
+      <span>
+        {tab.type === 'table' ? <TableOutlined style={{ marginRight: 4 }} /> : tab.type === 'schema_list' ? <FolderOutlined style={{ marginRight: 4 }} /> : tab.type === 'object' ? <CodeOutlined style={{ marginRight: 4, color: '#722ed1' }} /> : <CodeOutlined style={{ marginRight: 4 }} />}
+        {tab.title}
+        {tab.loading && <Spin size="small" style={{ marginLeft: 4 }} />}
+      </span>
+      </Tooltip>
+    ),
+    closable: tab.closable,
+    children: <div style={{ height: 'calc(100vh - 200px)', overflow: 'auto' }}>
+      {renderTabContent(tab)}
+    </div>,
+  };
+}), [tabs, dataSources]);
+
   const handleDeleteTableOrView = async () => {
     const { schema, name, isView } = deleteTarget;
     const treeType = dataSources.find(d => d.id === treeDSRef.current)?.type || 'mysql';
@@ -1912,42 +1948,14 @@ const SQLEditor: React.FC = () => {
               type="editable-card"
               activeKey={activeTabId}
               onChange={setActiveTabId}
+              destroyInactiveTabPane={true}
               onEdit={(targetKey, action) => {
                 if (action === 'add') addSQLTab();
                 else if (action === 'remove') closeTab(targetKey as string);
               }}
               addIcon={<Tooltip title={tr('query.newSQLQuery')}><PlusOutlined /></Tooltip>}
               hideAdd={false}
-              items={tabs.map((tab) => {
-                // Build tooltip showing data source > database > schema
-                let tooltipText = tab.title;
-                const tabDsId = (tab as any).dsId;
-                const tabDb = (tab as any).database;
-                const tabSch = (tab as any).schema;
-                if (tabDsId) {
-                  const dsInfo = dataSources.find(d => d.id === tabDsId);
-                  if (dsInfo) {
-                    tooltipText = dsInfo.name;
-                    if (tabDb) tooltipText += ` > ${tabDb}`;
-                    if (tabSch) tooltipText += ` > ${tabSch}`;
-                  }
-                }
-                return { key: tab.id,
-                label: (
-                  <Tooltip title={tooltipText}>
-                  <span>
-                    {tab.type === 'table' ? <TableOutlined style={{ marginRight: 4 }} /> : tab.type === 'schema_list' ? <FolderOutlined style={{ marginRight: 4 }} /> : tab.type === 'object' ? <CodeOutlined style={{ marginRight: 4, color: '#722ed1' }} /> : <CodeOutlined style={{ marginRight: 4 }} />}
-                    {tab.title}
-                    {tab.loading && <Spin size="small" style={{ marginLeft: 4 }} />}
-                  </span>
-                  </Tooltip>
-                ),
-                closable: tab.closable,
-                children: <div style={{ height: 'calc(100vh - 200px)', overflow: 'auto' }}>
-                  {renderTabContent(tab)}
-                </div>,
-              };
-            })}
+              items={tabItems}
             />
           )}
         </div>

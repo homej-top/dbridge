@@ -463,3 +463,11 @@ export interface ServerMetricsV2 {
   database_specific?: Record<string, any>;
   warnings?: string[];
 }
+
+export interface ScriptFileInfo {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size: number;
+  mod_time: string;
+}
