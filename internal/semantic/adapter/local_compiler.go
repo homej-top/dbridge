@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/dbridge/dbridge/internal/semantic/engine"
+	"github.com/homej-top/dbridge/internal/semantic/engine"
 )
 
 // LocalCompiler 将语义查询编译为 SQL。

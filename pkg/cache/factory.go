@@ -7,11 +7,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dbridge/dbridge/internal/config"
+	"github.com/homej-top/dbridge/internal/config"
 )
 
 var (
-	mu          sync.RWMutex
+	mu           sync.RWMutex
 	defaultCache Cache
 )
 

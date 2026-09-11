@@ -9,8 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/dbridge/dbridge/internal/repository"
-	cachePkg "github.com/dbridge/dbridge/pkg/cache"
+	"github.com/homej-top/dbridge/internal/repository"
+	cachePkg "github.com/homej-top/dbridge/pkg/cache"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -133,8 +133,12 @@ func (s *AuditLogService) List(page, pageSize int, module, operation, result, us
 	if err := q.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	if page < 1 { page = 1 }
-	if pageSize < 1 || pageSize > 200 { pageSize = 20 }
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 200 {
+		pageSize = 20
+	}
 	offset := (page - 1) * pageSize
 	if err := q.Order("created_at DESC").Offset(offset).Limit(pageSize).Find(&logs).Error; err != nil {
 		return nil, 0, err
@@ -165,7 +169,9 @@ func (s *AuditLogService) PurgeExpired(retentionDays int, batchSize int) (int64,
 	for {
 		select {
 		case <-ctx.Done():
-			if logger != nil { logger.Warn("audit purge timed out", zap.Int64("deleted_sofar", total)) }
+			if logger != nil {
+				logger.Warn("audit purge timed out", zap.Int64("deleted_sofar", total))
+			}
 			s.writePurgeLog(total, time.Since(startTime), nil)
 			return total, nil
 		default:
@@ -198,7 +204,9 @@ func (s *AuditLogService) PurgeExpired(retentionDays int, batchSize int) (int64,
 			logger.Info("audit purge batch", zap.Int("batch_size", len(ids)), zap.Int64("total", total))
 		}
 	}
-	if logger != nil { logger.Info("audit purge completed", zap.Int64("deleted", total)) }
+	if logger != nil {
+		logger.Info("audit purge completed", zap.Int64("deleted", total))
+	}
 	s.writePurgeLog(total, time.Since(startTime), lastErr)
 	cleanExpiredLocks()
 	return total, lastErr
@@ -243,7 +251,9 @@ func acquirePurgeLock() (release func(), err error) {
 
 func acquireDistributedLock(lockKey string, ttl time.Duration) bool {
 	db := repository.GetDB()
-	if db == nil { return false }
+	if db == nil {
+		return false
+	}
 	dialector := db.Config.Dialector.Name()
 	switch dialector {
 	case "sqlite":
@@ -257,13 +267,17 @@ func acquireDistributedLock(lockKey string, ttl time.Duration) bool {
 
 func releaseDistributedLock(lockKey string) {
 	db := repository.GetDB()
-	if db == nil { return }
+	if db == nil {
+		return
+	}
 	db.Exec("DELETE FROM settings WHERE key = ? AND category = 'lock'", lockKey)
 }
 
 func acquireDBLock(lockKey string, ttl time.Duration) bool {
 	db := repository.GetDB()
-	if db == nil { return false }
+	if db == nil {
+		return false
+	}
 	expires := time.Now().Add(ttl).Unix()
 	now := time.Now().Unix()
 
@@ -285,7 +299,9 @@ func acquireDBLock(lockKey string, ttl time.Duration) bool {
 
 func cleanExpiredLocks() {
 	db := repository.GetDB()
-	if db == nil { return }
+	if db == nil {
+		return
+	}
 	now := time.Now().Unix()
 	db.Exec("DELETE FROM settings WHERE category = 'lock' AND CAST(value AS INTEGER) < ?", now)
 }
@@ -306,11 +322,15 @@ func StartDiskMonitor(dataDir string) {
 			usage := getDiskUsage(dataDir)
 			if usage >= 0.95 {
 				if writeSuspended.CompareAndSwap(false, true) {
-					if logger != nil { logger.Warn("audit write suspended: disk usage >= 95%") }
+					if logger != nil {
+						logger.Warn("audit write suspended: disk usage >= 95%")
+					}
 				}
 			} else if usage < 0.85 {
 				if writeSuspended.CompareAndSwap(true, false) {
-					if logger != nil { logger.Info("audit write resumed: disk recovered") }
+					if logger != nil {
+						logger.Info("audit write resumed: disk recovered")
+					}
 				}
 			}
 		}

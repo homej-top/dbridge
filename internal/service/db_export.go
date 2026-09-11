@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dbridge/dbridge/internal/repository"
-	"github.com/dbridge/dbridge/pkg/storage"
+	"github.com/homej-top/dbridge/internal/repository"
+	"github.com/homej-top/dbridge/pkg/storage"
 	"gorm.io/gorm"
 )
 
@@ -35,9 +35,9 @@ type DBExportInput struct {
 }
 
 type DBImportInput struct {
-	DsID   string `json:"ds_id" binding:"required"`
-	Schema string `json:"schema"`
-	SQL    string `json:"sql" binding:"required"`
+	DsID   string   `json:"ds_id" binding:"required"`
+	Schema string   `json:"schema"`
+	SQL    string   `json:"sql" binding:"required"`
 	Tables []string `json:"tables"`
 }
 
@@ -176,15 +176,15 @@ func (s *DBExportService) ImportUpload(input ImportUploadInput, fileData []byte)
 // ─── Manifest ─────────────────────────────────────────────────────────────
 
 type ExportManifest struct {
-	SourceName   string   `json:"source_name"`
-	SourceType   string   `json:"source_type"`
-	TargetType   string   `json:"target_type"`
-	Tables       []string `json:"tables"`
-	ExportedAt   string   `json:"exported_at"`
-	Format       string   `json:"format"`
-	IncludeDDL   bool     `json:"include_ddl"`
-	IncludeData  bool     `json:"include_data"`
-	BatchSize    int      `json:"batch_size"`
+	SourceName  string   `json:"source_name"`
+	SourceType  string   `json:"source_type"`
+	TargetType  string   `json:"target_type"`
+	Tables      []string `json:"tables"`
+	ExportedAt  string   `json:"exported_at"`
+	Format      string   `json:"format"`
+	IncludeDDL  bool     `json:"include_ddl"`
+	IncludeData bool     `json:"include_data"`
+	BatchSize   int      `json:"batch_size"`
 }
 
 func (s *DBExportService) GenerateManifest(input DBExportInput, dsName string) ([]byte, error) {

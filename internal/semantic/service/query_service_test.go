@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/dbridge/dbridge/internal/semantic/engine"
+	"github.com/homej-top/dbridge/internal/semantic/engine"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )

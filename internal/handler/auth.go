@@ -5,11 +5,11 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/dbridge/dbridge/internal/config"
-	"github.com/dbridge/dbridge/internal/model"
-	"github.com/dbridge/dbridge/internal/repository"
-	"github.com/dbridge/dbridge/internal/service"
 	"github.com/gin-gonic/gin"
+	"github.com/homej-top/dbridge/internal/config"
+	"github.com/homej-top/dbridge/internal/model"
+	"github.com/homej-top/dbridge/internal/repository"
+	"github.com/homej-top/dbridge/internal/service"
 	"go.uber.org/zap"
 )
 

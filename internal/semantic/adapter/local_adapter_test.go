@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/dbridge/dbridge/internal/repository"
-	"github.com/dbridge/dbridge/internal/semantic/engine"
+	"github.com/homej-top/dbridge/internal/repository"
+	"github.com/homej-top/dbridge/internal/semantic/engine"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )

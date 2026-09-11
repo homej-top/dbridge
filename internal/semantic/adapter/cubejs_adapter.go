@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/dbridge/dbridge/internal/semantic/adapter/cubejs"
-	"github.com/dbridge/dbridge/internal/semantic/engine"
+	"github.com/homej-top/dbridge/internal/semantic/adapter/cubejs"
+	"github.com/homej-top/dbridge/internal/semantic/engine"
 )
 
 // CubeJSAdapter Cube.js 语义层适配器。

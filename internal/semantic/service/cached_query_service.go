@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/dbridge/dbridge/internal/semantic/engine"
-	cachePkg "github.com/dbridge/dbridge/pkg/cache"
+	"github.com/homej-top/dbridge/internal/semantic/engine"
+	cachePkg "github.com/homej-top/dbridge/pkg/cache"
 )
 
 const semanticCachePrefix = "semantic"

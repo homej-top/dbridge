@@ -7,12 +7,12 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/dbridge/dbridge/internal/model"
-	"github.com/dbridge/dbridge/internal/repository"
-	"github.com/dbridge/dbridge/internal/service"
-	storagePkg "github.com/dbridge/dbridge/pkg/storage"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/homej-top/dbridge/internal/model"
+	"github.com/homej-top/dbridge/internal/repository"
+	"github.com/homej-top/dbridge/internal/service"
+	storagePkg "github.com/homej-top/dbridge/pkg/storage"
 )
 
 // UploadSQLiteFile handles .db file upload for SQLite data sources

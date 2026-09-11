@@ -3,9 +3,10 @@ package service
 import (
 	"fmt"
 
-	"github.com/dbridge/dbridge/internal/repository"
 	"strings"
 	"time"
+
+	"github.com/homej-top/dbridge/internal/repository"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dbridge/dbridge/internal/semantic/engine"
+	"github.com/homej-top/dbridge/internal/semantic/engine"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -21,7 +21,9 @@ func (m *mockEngine) Query(ctx context.Context, req *engine.QueryRequest) (*engi
 func (m *mockEngine) ListCubes(ctx context.Context, filter *engine.CubeFilter) ([]*engine.CubeMeta, error) {
 	return nil, nil
 }
-func (m *mockEngine) GetCube(ctx context.Context, name string) (*engine.CubeDetail, error) { return nil, nil }
+func (m *mockEngine) GetCube(ctx context.Context, name string) (*engine.CubeDetail, error) {
+	return nil, nil
+}
 func (m *mockEngine) ListMeasures(ctx context.Context, cubeName string) ([]*engine.MeasureMeta, error) {
 	return nil, nil
 }
@@ -51,8 +53,8 @@ func TestHealthChecker_AllHealthy(t *testing.T) {
 
 func TestHealthChecker_OneUnhealthy(t *testing.T) {
 	engines := map[string]engine.SemanticQueryEngine{
-		"local":   &mockEngine{},
-		"cubejs":  &mockEngine{pingErr: fmt.Errorf("connection refused")},
+		"local":  &mockEngine{},
+		"cubejs": &mockEngine{pingErr: fmt.Errorf("connection refused")},
 	}
 	checker := NewHealthChecker(engines)
 

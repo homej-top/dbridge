@@ -5,27 +5,27 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/dbridge/dbridge/internal/semantic/engine"
+	"github.com/homej-top/dbridge/internal/semantic/engine"
 )
 
 var memberPattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*\.[a-zA-Z_][a-zA-Z0-9_]*$`)
 
 var validOperators = map[string]bool{
-	"equals":      true,
-	"notEquals":   true,
-	"contains":    true,
-	"gt":          true,
-	"gte":         true,
-	"lt":          true,
-	"lte":         true,
-	"in":          true,
-	"set":         true,
-	"notSet":      true,
+	"equals":    true,
+	"notEquals": true,
+	"contains":  true,
+	"gt":        true,
+	"gte":       true,
+	"lt":        true,
+	"lte":       true,
+	"in":        true,
+	"set":       true,
+	"notSet":    true,
 }
 
 const (
-	maxLimit     = 10000
-	maxPageSize  = 10000
+	maxLimit    = 10000
+	maxPageSize = 10000
 )
 
 // ValidateQueryRequest 校验语义查询请求。

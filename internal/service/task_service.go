@@ -13,10 +13,10 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/dbridge/dbridge/internal/repository"
-	"github.com/dbridge/dbridge/internal/service/drivers"
-	"github.com/dbridge/dbridge/pkg/sqlsplit"
-	"github.com/dbridge/dbridge/pkg/storage"
+	"github.com/homej-top/dbridge/internal/repository"
+	"github.com/homej-top/dbridge/internal/service/drivers"
+	"github.com/homej-top/dbridge/pkg/sqlsplit"
+	"github.com/homej-top/dbridge/pkg/storage"
 	"gorm.io/gorm"
 )
 

@@ -4,8 +4,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/dbridge/dbridge/internal/repository"
 	"github.com/google/uuid"
+	"github.com/homej-top/dbridge/internal/repository"
 	"gorm.io/gorm"
 )
 
@@ -71,17 +71,17 @@ func (s *SyncTaskService) Create(input CreateSyncTaskInput, userID, tenantID str
 	}
 
 	task := repository.SyncTask{
-		ID:        uuid.New().String(),
-		Name:      input.Name,
-		SourceDS:  input.SourceDS,
-		TargetDS:  input.TargetDS,
+		ID:          uuid.New().String(),
+		Name:        input.Name,
+		SourceDS:    input.SourceDS,
+		TargetDS:    input.TargetDS,
 		SourceTable: input.SourceTable,
 		TargetTable: input.TargetTable,
-		SyncMode:  syncMode,
-		Status:    "pending",
-		Progress:  0,
-		TenantID:  tenantID,
-		CreatedBy: userID,
+		SyncMode:    syncMode,
+		Status:      "pending",
+		Progress:    0,
+		TenantID:    tenantID,
+		CreatedBy:   userID,
 	}
 
 	if err := s.db.Create(&task).Error; err != nil {

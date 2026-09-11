@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dbridge/dbridge/internal/model"
-	"github.com/dbridge/dbridge/internal/repository"
-	"github.com/dbridge/dbridge/internal/service"
-	"github.com/dbridge/dbridge/pkg/storage"
 	"github.com/gin-gonic/gin"
+	"github.com/homej-top/dbridge/internal/model"
+	"github.com/homej-top/dbridge/internal/repository"
+	"github.com/homej-top/dbridge/internal/service"
+	"github.com/homej-top/dbridge/pkg/storage"
 	"go.uber.org/zap"
 )
 

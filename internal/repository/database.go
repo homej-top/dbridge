@@ -3,8 +3,8 @@ package repository
 import (
 	"fmt"
 
-	"github.com/dbridge/dbridge/internal/config"
-	"github.com/dbridge/dbridge/internal/service/drivers"
+	"github.com/homej-top/dbridge/internal/config"
+	"github.com/homej-top/dbridge/internal/service/drivers"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"

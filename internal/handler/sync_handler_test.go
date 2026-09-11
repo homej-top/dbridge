@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dbridge/dbridge/internal/config"
 	"github.com/gin-gonic/gin"
+	"github.com/homej-top/dbridge/internal/config"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 )

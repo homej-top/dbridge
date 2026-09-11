@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/dbridge/dbridge/internal/repository"
+	"github.com/homej-top/dbridge/internal/repository"
 )
 
 // ─── Strategy Interface ────────────────────────────────────────────────────

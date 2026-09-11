@@ -5,10 +5,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dbridge/dbridge/internal/config"
-	"github.com/dbridge/dbridge/internal/model"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/homej-top/dbridge/internal/config"
+	"github.com/homej-top/dbridge/internal/model"
 )
 
 type Claims struct {
@@ -95,10 +95,10 @@ func RequirePermission(permissions ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Simple role-to-permission mapping
 		rolePerms := map[string][]string{
-			"admin":   {"*"},
-			"operator": {"data_source:read", "data_source:write", "sync:read", "sync:write", "query:execute"},
+			"admin":     {"*"},
+			"operator":  {"data_source:read", "data_source:write", "sync:read", "sync:write", "query:execute"},
 			"developer": {"data_source:read", "sync:read", "sync:write", "query:execute"},
-			"viewer":  {"data_source:read", "sync:read"},
+			"viewer":    {"data_source:read", "sync:read"},
 		}
 
 		userRole, _ := c.Get("role")

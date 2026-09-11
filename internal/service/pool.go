@@ -12,10 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/dbridge/dbridge/internal/repository"
-	"github.com/dbridge/dbridge/internal/service/ai_security"
-	"github.com/dbridge/dbridge/internal/service/drivers"
-	cryptoPkg "github.com/dbridge/dbridge/pkg/crypto"
+	"github.com/homej-top/dbridge/internal/repository"
+	"github.com/homej-top/dbridge/internal/service/drivers"
 	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
 )
@@ -338,15 +336,6 @@ var globalPoolManager *ConnectionPoolManager
 // InitPoolManager creates the global pool manager. Call once during startup.
 func InitPoolManager(cfg PoolConfig, mgrCfg ManagerConfig, perDB map[string]PoolConfig, logger *zap.Logger) {
 	globalPoolManager = NewConnectionPoolManager(cfg, mgrCfg, perDB, logger)
-
-	// Set the DBConnector for ai_security package to avoid circular imports
-	ai_security.DBConnector = func(ctx context.Context, ds *repository.DataSource) (*sql.DB, error) {
-		pwd, err := cryptoPkg.Decrypt(ds.Password)
-		if err != nil {
-			return nil, fmt.Errorf("decrypt password: %w", err)
-		}
-		return globalPoolManager.GetDBConnection(ctx, *ds, pwd)
-	}
 
 	// Set the PooledDBConnector for driver cross-database operations
 	drivers.PooledDBConnector = func(dsType, host string, port int, username, password, database, dsID string) (*sql.DB, error) {

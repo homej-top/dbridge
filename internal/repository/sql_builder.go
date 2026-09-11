@@ -3,7 +3,7 @@ package repository
 import (
 	"strings"
 
-	"github.com/dbridge/dbridge/internal/service/drivers"
+	"github.com/homej-top/dbridge/internal/service/drivers"
 )
 
 // SQLBuilder wraps query building with system dialect support

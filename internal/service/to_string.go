@@ -17,3 +17,13 @@ func toString(v interface{}) string {
 		return fmt.Sprintf("%v", v)
 	}
 }
+
+func mapStr(row map[string]interface{}, key string, target *string) {
+	if v, ok := row[key]; ok && v != nil {
+		if b, ok := v.([]byte); ok {
+			*target = string(b)
+		} else {
+			*target = toString(v)
+		}
+	}
+}

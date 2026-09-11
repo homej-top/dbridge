@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dbridge/dbridge/internal/repository"
-	"github.com/dbridge/dbridge/internal/service/drivers"
-	cryptoPkg "github.com/dbridge/dbridge/pkg/crypto"
+	"github.com/homej-top/dbridge/internal/repository"
+	"github.com/homej-top/dbridge/internal/service/drivers"
+	cryptoPkg "github.com/homej-top/dbridge/pkg/crypto"
 	"gorm.io/gorm"
 )
 

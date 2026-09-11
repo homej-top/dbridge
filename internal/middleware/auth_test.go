@@ -5,9 +5,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/dbridge/dbridge/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/homej-top/dbridge/internal/config"
 )
 
 func testJWTConfig() *config.JWTConfig {

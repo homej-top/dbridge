@@ -3,9 +3,9 @@ package service
 import (
 	"errors"
 
-	"github.com/dbridge/dbridge/internal/middleware"
-	"github.com/dbridge/dbridge/internal/repository"
-	"github.com/dbridge/dbridge/internal/config"
+	"github.com/homej-top/dbridge/internal/config"
+	"github.com/homej-top/dbridge/internal/middleware"
+	"github.com/homej-top/dbridge/internal/repository"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
@@ -24,9 +24,9 @@ type LoginInput struct {
 }
 
 type LoginOutput struct {
-	Token     string              `json:"token"`
-	ExpiresIn int                 `json:"expires_in"`
-	User      repository.User     `json:"user"`
+	Token     string          `json:"token"`
+	ExpiresIn int             `json:"expires_in"`
+	User      repository.User `json:"user"`
 }
 
 func (s *AuthService) Login(input LoginInput) (*LoginOutput, error) {

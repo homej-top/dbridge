@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dbridge/dbridge/internal/semantic/engine"
+	"github.com/homej-top/dbridge/internal/semantic/engine"
 )
 
 // HealthStatus 引擎健康状态。

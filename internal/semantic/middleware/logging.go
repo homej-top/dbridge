@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/dbridge/dbridge/internal/semantic/engine"
+	"github.com/homej-top/dbridge/internal/semantic/engine"
 	"go.uber.org/zap"
 )
 

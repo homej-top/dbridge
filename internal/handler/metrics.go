@@ -3,8 +3,8 @@ package handler
 import (
 	"net/http"
 
-	"github.com/dbridge/dbridge/internal/service"
 	"github.com/gin-gonic/gin"
+	"github.com/homej-top/dbridge/internal/service"
 )
 
 type MetricsHandler struct {

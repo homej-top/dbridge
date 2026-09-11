@@ -3,7 +3,7 @@ package service
 import (
 	"testing"
 
-	"github.com/dbridge/dbridge/internal/semantic/engine"
+	"github.com/homej-top/dbridge/internal/semantic/engine"
 )
 
 func TestValidateQueryRequest_ValidMember(t *testing.T) {

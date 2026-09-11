@@ -1,11 +1,11 @@
 package handler
 
 import (
-	"github.com/dbridge/dbridge/internal/config"
-	"github.com/dbridge/dbridge/internal/middleware"
-	"github.com/dbridge/dbridge/internal/repository"
-	"github.com/dbridge/dbridge/internal/service"
 	"github.com/gin-gonic/gin"
+	"github.com/homej-top/dbridge/internal/config"
+	"github.com/homej-top/dbridge/internal/middleware"
+	"github.com/homej-top/dbridge/internal/repository"
+	"github.com/homej-top/dbridge/internal/service"
 	"go.uber.org/zap"
 )
 
@@ -246,25 +246,6 @@ func RegisterRoutes(r *gin.RouterGroup, cfg *config.Config, logger *zap.Logger) 
 		scripts.POST("/:id/move", scriptHandler.Move)
 	}
 
-	// AI Skill routes (protected)
-	aiSkillHandler := NewAISkillHandler(logger)
-	aiSkills := r.Group("/ai-skills")
-	aiSkills.Use(protectedMW...)
-	{
-		aiSkills.GET("", aiSkillHandler.List)
-		aiSkills.POST("", aiSkillHandler.Create)
-		aiSkills.POST("/import", aiSkillHandler.Import)
-		aiSkills.GET("/:id", aiSkillHandler.Get)
-		aiSkills.PUT("/:id", aiSkillHandler.Update)
-		aiSkills.DELETE("/:id", aiSkillHandler.Delete)
-		aiSkills.POST("/:id/toggle", aiSkillHandler.ToggleActive)
-		aiSkills.GET("/:id/preview", aiSkillHandler.Preview)
-		aiSkills.POST("/:id/test", aiSkillHandler.Test)
-		aiSkills.GET("/:id/versions", aiSkillHandler.Versions)
-		aiSkills.POST("/:id/rollback", aiSkillHandler.Rollback)
-		aiSkills.GET("/:id/export", aiSkillHandler.Export)
-	}
-
 	// Report routes (protected)
 	reportHandler := NewReportHandler(logger, cfg)
 	reports := r.Group("/reports")
@@ -272,7 +253,6 @@ func RegisterRoutes(r *gin.RouterGroup, cfg *config.Config, logger *zap.Logger) 
 	{
 		reports.GET("", reportHandler.List)
 		reports.POST("", reportHandler.Create)
-		reports.POST("/generate-sql", reportHandler.GenerateSQL)
 		reports.GET("/:id", reportHandler.Get)
 		reports.PUT("/:id", reportHandler.Update)
 		reports.DELETE("/:id", reportHandler.Delete)

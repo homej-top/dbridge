@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/dbridge/dbridge/internal/semantic/engine"
-	"github.com/dbridge/dbridge/internal/service"
+	"github.com/homej-top/dbridge/internal/semantic/engine"
+	"github.com/homej-top/dbridge/internal/service"
 	"gorm.io/gorm"
 )
 

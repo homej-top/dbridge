@@ -1,5 +1,5 @@
-module github.com/dbridge/dbridge
-
+// module github.com/dbridge/dbridge
+module github.com/homej-top/dbridge
 go 1.26.3
 
 require (

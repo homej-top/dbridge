@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/dbridge/dbridge/internal/repository"
+	"github.com/homej-top/dbridge/internal/repository"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )

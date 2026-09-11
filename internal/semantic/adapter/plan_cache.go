@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	cachePkg "github.com/dbridge/dbridge/pkg/cache"
+	cachePkg "github.com/homej-top/dbridge/pkg/cache"
 )
 
 // CompiledPlan 编译后的查询计划。

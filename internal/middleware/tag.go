@@ -3,8 +3,8 @@ package middleware
 import (
 	"net/http"
 
-	"github.com/dbridge/dbridge/internal/repository"
 	"github.com/gin-gonic/gin"
+	"github.com/homej-top/dbridge/internal/repository"
 )
 
 // RequireManagementTag 校验数据源是否拥有 database_management 标签

@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dbridge/dbridge/internal/config"
-	cryptoPkg "github.com/dbridge/dbridge/pkg/crypto"
-	"github.com/dbridge/dbridge/internal/repository"
 	"github.com/gin-gonic/gin"
+	"github.com/homej-top/dbridge/internal/config"
+	"github.com/homej-top/dbridge/internal/repository"
+	cryptoPkg "github.com/homej-top/dbridge/pkg/crypto"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 	"gorm.io/driver/sqlite"

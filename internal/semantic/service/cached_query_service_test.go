@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dbridge/dbridge/internal/semantic/engine"
-	cachePkg "github.com/dbridge/dbridge/pkg/cache"
+	"github.com/homej-top/dbridge/internal/semantic/engine"
+	cachePkg "github.com/homej-top/dbridge/pkg/cache"
 )
 
 type mockEngine struct {
@@ -23,7 +23,9 @@ func (m *mockEngine) Query(_ context.Context, _ *engine.QueryRequest) (*engine.Q
 func (m *mockEngine) ListCubes(_ context.Context, _ *engine.CubeFilter) ([]*engine.CubeMeta, error) {
 	return nil, nil
 }
-func (m *mockEngine) GetCube(_ context.Context, _ string) (*engine.CubeDetail, error) { return nil, nil }
+func (m *mockEngine) GetCube(_ context.Context, _ string) (*engine.CubeDetail, error) {
+	return nil, nil
+}
 func (m *mockEngine) ListMeasures(_ context.Context, _ string) ([]*engine.MeasureMeta, error) {
 	return nil, nil
 }
