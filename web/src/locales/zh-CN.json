@@ -171,6 +171,9 @@
     "queryStr": "查询",
     "noScripts": "暂无脚本",
     "searchScript": "搜索脚本...",
+    "rootDir": "根目录",
+    "createSQLTabFirst": "请先创建 SQL 标签页",
+    "loadScriptFailed": "加载脚本失败",
     "empty": "(空)",
     "exportTitle": "导出查询结果",
     "createAndRun": "创建并运行",
@@ -802,7 +805,10 @@
     "folderNamePlaceholder": "如: 查询脚本",
     "requireScriptName": "请输入脚本名称",
     "requireFolderName": "请输入目录名称",
-    "addScript": "添加脚本"
+    "addScript": "添加脚本",
+    "createSuccess": "创建成功",
+    "updateSuccess": "修改成功",
+    "deleteSuccess": "删除成功"
   },
   "reports": {
     "title": "数据报表",

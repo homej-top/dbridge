@@ -21,6 +21,7 @@ import (
 	"github.com/homej-top/dbridge/internal/repository"
 	"github.com/homej-top/dbridge/internal/service"
 	"github.com/homej-top/dbridge/pkg/storage"
+	"github.com/homej-top/dbridge/pkg/utils"
 	"go.uber.org/zap"
 )
 
@@ -70,6 +71,15 @@ func (h *FileManagerHandler) List(c *gin.Context) {
 		}
 	}
 	dir := c.DefaultQuery("dir", "")
+	// Validate path to prevent directory traversal attacks
+	if dir != "" {
+		var err error
+		dir, err = validatePath(dir)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, "invalid path: "+err.Error()))
+			return
+		}
+	}
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "50"))
 	search := c.Query("search")
@@ -105,6 +115,15 @@ func (h *FileManagerHandler) Tree(c *gin.Context) {
 		return
 	}
 	dir := c.DefaultQuery("dir", "")
+	// Validate path to prevent directory traversal attacks
+	if dir != "" {
+		var err error
+		dir, err = validatePath(dir)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, "invalid path: "+err.Error()))
+			return
+		}
+	}
 	depth, _ := strconv.Atoi(c.DefaultQuery("depth", "5"))
 
 	// 读取全局最大深度配置
@@ -141,6 +160,15 @@ func (h *FileManagerHandler) Upload(c *gin.Context) {
 		return
 	}
 	dir := c.PostForm("dir")
+	// Validate dir path to prevent directory traversal attacks
+	if dir != "" {
+		var err error
+		dir, err = validatePath(dir)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, "invalid dir: "+err.Error()))
+			return
+		}
+	}
 	file, header, err := c.Request.FormFile("file")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, "file required"))
@@ -185,6 +213,13 @@ func (h *FileManagerHandler) Download(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, "path required"))
 		return
 	}
+	// Validate path to prevent directory traversal attacks
+	var err error
+	path, err = validatePath(path)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, "invalid path: "+err.Error()))
+		return
+	}
 	st, ok := h.requireStorage(c)
 	if !ok {
 		return
@@ -219,6 +254,13 @@ func (h *FileManagerHandler) Stat(c *gin.Context) {
 	path := c.Query("path")
 	if path == "" {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, "path required"))
+		return
+	}
+	// Validate path to prevent directory traversal attacks
+	var err error
+	path, err = validatePath(path)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, "invalid path: "+err.Error()))
 		return
 	}
 	st, ok := h.requireStorage(c)
@@ -279,6 +321,13 @@ func (h *FileManagerHandler) Delete(c *gin.Context) {
 	path := c.Query("path")
 	if path == "" {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, "path required"))
+		return
+	}
+	// Validate path to prevent directory traversal attacks
+	var err error
+	path, err = validatePath(path)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, "invalid path: "+err.Error()))
 		return
 	}
 	st, ok := h.requireStorage(c)
@@ -811,6 +860,21 @@ func (h *FileManagerHandler) BatchDownload(c *gin.Context) {
 		return
 	}
 
+	// Validate all paths to prevent directory traversal attacks
+	validatedPaths := make([]string, 0, len(req.Paths))
+	for _, path := range req.Paths {
+		cleanedPath, err := validatePath(path)
+		if err != nil {
+			h.logger.Warn("batch download: invalid path", zap.String("path", path), zap.Error(err))
+			continue
+		}
+		validatedPaths = append(validatedPaths, cleanedPath)
+	}
+	if len(validatedPaths) == 0 {
+		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, "no valid paths"))
+		return
+	}
+
 	st, ok := h.requireStorage(c)
 	if !ok {
 		return
@@ -826,7 +890,7 @@ func (h *FileManagerHandler) BatchDownload(c *gin.Context) {
 		zw := zip.NewWriter(c.Writer)
 		defer zw.Close()
 
-		for _, path := range req.Paths {
+		for _, path := range validatedPaths {
 			reader, err := st.ReadStream(ctx, path)
 			if err != nil {
 				h.logger.Warn("batch download: skip file", zap.String("path", path), zap.Error(err))
@@ -890,6 +954,12 @@ func sanitizeFileName(name string) string {
 	sanitized := strings.TrimSpace(string(result))
 	sanitized = strings.ReplaceAll(sanitized, " ", "_")
 	return sanitized
+}
+
+// validatePath validates that a path does not contain directory traversal sequences
+// and is safe to use. Returns the cleaned path or an error if invalid.
+func validatePath(path string) (string, error) {
+	return utils.ValidatePath(path)
 }
 
 // isUploadAllowed 检查文件扩展名是否在白名单中

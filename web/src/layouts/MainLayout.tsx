@@ -54,6 +54,7 @@ const MainLayout: React.FC = () => {
       key: 'data-ops', icon: <SettingOutlined />, label: t('nav.dataOps'),
       children: [
         { key: '/query', label: t('nav.query') },
+        { key: '/scripts', label: t('nav.scripts') },
         { key: '/compare', label: t('nav.compare') },
       ],
     },

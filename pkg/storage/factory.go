@@ -18,7 +18,7 @@ type ProfileFactoryConfig struct {
 
 // LocalFactoryConfig 本地存储工厂配置
 type LocalFactoryConfig struct {
-	RootDir string
+	RootDir string `json:"root_dir"`
 }
 
 // S3FactoryConfig S3 存储工厂配置

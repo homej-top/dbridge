@@ -171,6 +171,9 @@
     "queryStr": "Query",
     "noScripts": "No scripts",
     "searchScript": "Search scripts...",
+    "rootDir": "Root",
+    "createSQLTabFirst": "Please create a SQL query tab first",
+    "loadScriptFailed": "Failed to load script",
     "empty": "(empty)",
     "exportTitle": "Export Query Result",
     "createAndRun": "Create & Run",
@@ -802,7 +805,10 @@
     "folderNamePlaceholder": "e.g.: Query Scripts",
     "requireScriptName": "Please enter script name",
     "requireFolderName": "Please enter folder name",
-    "addScript": "Add Script"
+    "addScript": "Add Script",
+    "createSuccess": "Created successfully",
+    "updateSuccess": "Updated successfully",
+    "deleteSuccess": "Deleted successfully"
   },
   "reports": {
     "title": "Reports",

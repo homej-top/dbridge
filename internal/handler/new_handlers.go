@@ -18,6 +18,7 @@ import (
 
 // ─── Script Handler ────────────────────────────────────────────────────────
 
+
 type ScriptHandler struct {
 	svc    *service.ScriptService
 	logger *zap.Logger
@@ -168,13 +169,28 @@ func (h *ScriptHandler) resolveScriptStorage() (storage.FileStorage, string, boo
 
 // FsList lists directory contents within the script storage binding
 func (h *ScriptHandler) FsList(c *gin.Context) {
-	st, _, ok := h.resolveScriptStorage()
+	st, basePath, ok := h.resolveScriptStorage()
 	if !ok {
 		c.JSON(http.StatusServiceUnavailable, model.ErrorResponse(model.CodeServiceUnavailable, "没有可用的存储实例"))
 		return
 	}
 	dir := c.DefaultQuery("dir", "")
-	result, err := st.List(c.Request.Context(), dir, &storage.ListOptions{
+	// Validate path to prevent directory traversal attacks
+	if dir != "" {
+		var err error
+		dir, err = validatePath(dir)
+		if err != nil {
+			h.logger.Error("script fs list: invalid path", zap.String("dir", dir), zap.Error(err))
+			c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, "invalid path: "+err.Error()))
+			return
+		}
+	}
+	// Prepend basePath to ensure we only list files within the scripts directory
+	fullDir := basePath
+	if dir != "" {
+		fullDir = basePath + "/" + dir
+	}
+	result, err := st.List(c.Request.Context(), fullDir, &storage.ListOptions{
 		Page:     1,
 		PageSize: 500,
 	})
@@ -183,12 +199,16 @@ func (h *ScriptHandler) FsList(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse(model.CodeDatabaseError, err.Error()))
 		return
 	}
+	// Strip basePath prefix from paths so frontend sees relative paths
+	for i := range result.Files {
+		result.Files[i].Path = strings.TrimPrefix(result.Files[i].Path, basePath+"/")
+	}
 	c.JSON(http.StatusOK, model.SuccessResponse(result))
 }
 
 // FsRead reads a file's text content from script storage
 func (h *ScriptHandler) FsRead(c *gin.Context) {
-	st, _, ok := h.resolveScriptStorage()
+	st, basePath, ok := h.resolveScriptStorage()
 	if !ok {
 		c.JSON(http.StatusServiceUnavailable, model.ErrorResponse(model.CodeServiceUnavailable, "没有可用的存储实例"))
 		return
@@ -198,7 +218,16 @@ func (h *ScriptHandler) FsRead(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, "path required"))
 		return
 	}
-	data, err := st.Read(c.Request.Context(), filePath)
+	// Validate path to prevent directory traversal attacks
+	validatedPath, err := validatePath(filePath)
+	if err != nil {
+		h.logger.Error("script fs read: invalid path", zap.String("path", filePath), zap.Error(err))
+		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, "invalid path: "+err.Error()))
+		return
+	}
+	// Prepend basePath to ensure we only read files within the scripts directory
+	fullPath := basePath + "/" + validatedPath
+	data, err := st.Read(c.Request.Context(), fullPath)
 	if err != nil {
 		h.logger.Error("script fs read failed", zap.Error(err))
 		c.JSON(http.StatusNotFound, model.ErrorResponse(model.CodeResourceNotFound, "file not found"))
@@ -212,7 +241,7 @@ func (h *ScriptHandler) FsRead(c *gin.Context) {
 
 // FsSave creates or overwrites a file in script storage
 func (h *ScriptHandler) FsSave(c *gin.Context) {
-	st, _, ok := h.resolveScriptStorage()
+	st, basePath, ok := h.resolveScriptStorage()
 	if !ok {
 		c.JSON(http.StatusServiceUnavailable, model.ErrorResponse(model.CodeServiceUnavailable, "没有可用的存储实例"))
 		return
@@ -225,8 +254,17 @@ func (h *ScriptHandler) FsSave(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error()))
 		return
 	}
+	// Validate path to prevent directory traversal attacks
+	validatedPath, err := validatePath(req.Path)
+	if err != nil {
+		h.logger.Error("script fs save: invalid path", zap.String("path", req.Path), zap.Error(err))
+		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, "invalid path: "+err.Error()))
+		return
+	}
+	// Prepend basePath to ensure we only save files within the scripts directory
+	fullPath := basePath + "/" + validatedPath
 	reader := strings.NewReader(req.Content)
-	_, err := st.Save(c.Request.Context(), req.Path, reader, "text/plain")
+	_, err = st.Save(c.Request.Context(), fullPath, reader, "text/plain")
 	if err != nil {
 		h.logger.Error("script fs save failed", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse(model.CodeDatabaseError, err.Error()))
@@ -237,7 +275,7 @@ func (h *ScriptHandler) FsSave(c *gin.Context) {
 
 // FsMkdir creates a directory in script storage
 func (h *ScriptHandler) FsMkdir(c *gin.Context) {
-	st, _, ok := h.resolveScriptStorage()
+	st, basePath, ok := h.resolveScriptStorage()
 	if !ok {
 		c.JSON(http.StatusServiceUnavailable, model.ErrorResponse(model.CodeServiceUnavailable, "没有可用的存储实例"))
 		return
@@ -249,7 +287,16 @@ func (h *ScriptHandler) FsMkdir(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error()))
 		return
 	}
-	if err := st.Mkdir(c.Request.Context(), req.Path); err != nil {
+	// Validate path to prevent directory traversal attacks
+	validatedPath, err := validatePath(req.Path)
+	if err != nil {
+		h.logger.Error("script fs mkdir: invalid path", zap.String("path", req.Path), zap.Error(err))
+		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, "invalid path: "+err.Error()))
+		return
+	}
+	// Prepend basePath to ensure we only create directories within the scripts directory
+	fullPath := basePath + "/" + validatedPath
+	if err := st.Mkdir(c.Request.Context(), fullPath); err != nil {
 		h.logger.Error("script fs mkdir failed", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse(model.CodeDatabaseError, err.Error()))
 		return
@@ -259,7 +306,7 @@ func (h *ScriptHandler) FsMkdir(c *gin.Context) {
 
 // FsDelete deletes a file or directory in script storage
 func (h *ScriptHandler) FsDelete(c *gin.Context) {
-	st, _, ok := h.resolveScriptStorage()
+	st, basePath, ok := h.resolveScriptStorage()
 	if !ok {
 		c.JSON(http.StatusServiceUnavailable, model.ErrorResponse(model.CodeServiceUnavailable, "没有可用的存储实例"))
 		return
@@ -269,15 +316,24 @@ func (h *ScriptHandler) FsDelete(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, "path required"))
 		return
 	}
+	// Validate path to prevent directory traversal attacks
+	validatedPath, err := validatePath(filePath)
+	if err != nil {
+		h.logger.Error("script fs delete: invalid path", zap.String("path", filePath), zap.Error(err))
+		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, "invalid path: "+err.Error()))
+		return
+	}
 	isDir := c.Query("is_dir") == "true"
+	// Prepend basePath to ensure we only delete files within the scripts directory
+	fullPath := basePath + "/" + validatedPath
 	if isDir {
-		if err := st.RemoveDir(c.Request.Context(), filePath); err != nil {
+		if err := st.RemoveDir(c.Request.Context(), fullPath); err != nil {
 			h.logger.Error("script fs remove dir failed", zap.Error(err))
 			c.JSON(http.StatusInternalServerError, model.ErrorResponse(model.CodeDatabaseError, err.Error()))
 			return
 		}
 	} else {
-		if err := st.Delete(c.Request.Context(), filePath); err != nil {
+		if err := st.Delete(c.Request.Context(), fullPath); err != nil {
 			h.logger.Error("script fs delete failed", zap.Error(err))
 			c.JSON(http.StatusInternalServerError, model.ErrorResponse(model.CodeDatabaseError, err.Error()))
 			return
@@ -288,7 +344,7 @@ func (h *ScriptHandler) FsDelete(c *gin.Context) {
 
 // FsRename renames/moves a file or directory in script storage
 func (h *ScriptHandler) FsRename(c *gin.Context) {
-	st, _, ok := h.resolveScriptStorage()
+	st, basePath, ok := h.resolveScriptStorage()
 	if !ok {
 		c.JSON(http.StatusServiceUnavailable, model.ErrorResponse(model.CodeServiceUnavailable, "没有可用的存储实例"))
 		return
@@ -301,7 +357,23 @@ func (h *ScriptHandler) FsRename(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, err.Error()))
 		return
 	}
-	if err := st.Rename(c.Request.Context(), req.OldPath, req.NewPath); err != nil {
+	// Validate paths to prevent directory traversal attacks
+	validatedOldPath, err := validatePath(req.OldPath)
+	if err != nil {
+		h.logger.Error("script fs rename: invalid old path", zap.String("old_path", req.OldPath), zap.Error(err))
+		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, "invalid old path: "+err.Error()))
+		return
+	}
+	validatedNewPath, err := validatePath(req.NewPath)
+	if err != nil {
+		h.logger.Error("script fs rename: invalid new path", zap.String("new_path", req.NewPath), zap.Error(err))
+		c.JSON(http.StatusBadRequest, model.ErrorResponse(model.CodeParamError, "invalid new path: "+err.Error()))
+		return
+	}
+	// Prepend basePath to ensure we only rename files within the scripts directory
+	fullOldPath := basePath + "/" + validatedOldPath
+	fullNewPath := basePath + "/" + validatedNewPath
+	if err := st.Rename(c.Request.Context(), fullOldPath, fullNewPath); err != nil {
 		h.logger.Error("script fs rename failed", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse(model.CodeDatabaseError, err.Error()))
 		return

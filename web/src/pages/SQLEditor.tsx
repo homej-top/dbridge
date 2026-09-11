@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { useTranslation } from 'react-i18next';
 import {
   Select, Button, Table, message, Card, Space, Spin, Empty, Tooltip, Input, Dropdown, Modal,
-  Tabs, Form, Radio, Checkbox, Popconfirm, Tag, Alert,
+  Tabs, Form, Radio, Checkbox, Popconfirm, Tag, Alert, Typography, List,
 } from 'antd';
 import Editor, { loader } from '@monaco-editor/react';
 import * as monaco from 'monaco-editor';
@@ -34,9 +34,11 @@ import {
   MoreOutlined,
   DeleteOutlined,
   ReloadOutlined,
+  SearchOutlined,
+  FileTextOutlined,
 } from '@ant-design/icons';
-import { dsAPI, queryAPI, tableAPI, viewAPI } from '../api';
-import type { DataSource, SchemaInfo } from '../types';
+import { dsAPI, queryAPI, tableAPI, viewAPI, scriptFsAPI } from '../api';
+import type { DataSource, SchemaInfo, ScriptFileInfo } from '../types';
 import type { DataNode } from 'antd/es/tree';
 import TableStructureDrawer from '../components/TableStructureDrawer';
 import CreateTableModal from '../components/CreateTableModal';
@@ -323,6 +325,14 @@ const SQLEditor: React.FC = () => {
   const [schemaForm, setSchemaForm] = useState<{ open: boolean; mode: 'create' | 'edit'; database?: string; initValues?: { name: string; charset: string; collation: string } }>({ open: false, mode: 'create' });
   const [objectEditor, setObjectEditor] = useState<{ open: boolean; schema: string; objectType: string; objectName?: string; database?: string }>({ open: false, schema: '', objectType: '' });
   const [treeRefreshKey, setTreeRefreshKey] = useState<number | { type: 'object-created'; objectType: string; schema: string; database?: string }>(0);
+
+  // --- Script loading ---
+  const [scriptModalOpen, setScriptModalOpen] = useState(false);
+  const [scriptDir, setScriptDir] = useState('');
+  const [scriptDirs, setScriptDirs] = useState<ScriptFileInfo[]>([]);
+  const [scriptFiles, setScriptFiles] = useState<ScriptFileInfo[]>([]);
+  const [scriptLoading, setScriptLoading] = useState(false);
+  const [scriptKeyword, setScriptKeyword] = useState('');
 
   // Get DB type for the tree's current data source
   const treeDbType = useMemo(() => {
@@ -1023,6 +1033,47 @@ const SQLEditor: React.FC = () => {
     try { const res = await dsAPI.schemaNames(treeDSRef.current); setSchemaNameList(res.data.data || []); setTreeData([]); } catch {}
   };
 
+  // --- Script loading ---
+  const loadScriptDir = async (dir: string) => {
+    setScriptLoading(true);
+    setScriptDir(dir);
+    try {
+      const res = await scriptFsAPI.list(dir);
+      const all = res.data?.data?.files || [];
+      setScriptDirs(all.filter((f: ScriptFileInfo) => f.is_dir));
+      setScriptFiles(all.filter((f: ScriptFileInfo) => !f.is_dir));
+    } catch {}
+    finally { setScriptLoading(false); }
+  };
+
+  const openScriptModal = async () => {
+    setScriptModalOpen(true);
+    setScriptKeyword('');
+    await loadScriptDir('');
+  };
+
+  const loadScript = async (file: ScriptFileInfo) => {
+    if (!activeTab || activeTab.type !== 'sql') {
+      message.warning(tr('query.createSQLTabFirst'));
+      return;
+    }
+    try {
+      const res = await scriptFsAPI.read(file.path);
+      const content = res.data?.data?.content || '';
+      updateTab(activeTab.id, {
+        sql: content,
+        scriptId: file.path,
+        scriptName: file.name,
+        title: file.name,
+        scriptSaveStatus: 'saved'
+      } as any);
+      setScriptModalOpen(false);
+      message.success(tr('query.scriptLoaded', { name: file.name }));
+    } catch {
+      message.error(tr('query.loadScriptFailed'));
+    }
+  };
+
   // --- Keyboard shortcut ---
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
@@ -1547,78 +1598,84 @@ const SQLEditor: React.FC = () => {
     const t = tab as SqlTab;
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-        <div style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' }}>
-          {/* Data source + Database/Schema — per tab, independent */}
-          <Select
-            size="small"
-            style={{ minWidth: 180 }}
-            placeholder={tr('query.selectDS')}
-            value={t.dsId  || undefined}
-            onChange={(v) => {
-              updateTab(tab.id, { dsId: v, database: undefined, schema: undefined } as any);
-              // Clear this tab's cache
-              setTabDbListCache(prev => { const n = {...prev}; delete n[tab.id]; return n; });
-              setTabSchemaListCache(prev => { const n = {...prev}; delete n[tab.id]; return n; });
-            }}
-            options={dataSources.map((ds) => ({ label: `${ds.name} (${ds.type})`, value: ds.id }))}
-          />
-          {/* Database / Schema selectors — per tab type */}
-          {(() => {
-            const tabDs = dataSources.find(ds => ds.id === (t.dsId ));
-            const tabDbType = tabDs?.type || dbType;
-            if (tabDbType === 'postgres' || tabDbType === 'sqlserver') {
-            return (<>
-              <Select
-                size="small"
-                style={{ minWidth: 120 }}
-                placeholder="Database"
-                value={t.database || undefined}
-                allowClear
-                onDropdownVisibleChange={(open) => { if (open && !tabDbListCache[tab.id]) fetchDatabasesForTab(tab.id, t.dsId || ''); }}
-                onChange={(db) => {
-                  updateTab(tab.id, { database: db, schema: undefined } as any);
-                  if (db) fetchSchemasForTab(tab.id, db, t.dsId || '');
-                }}
-                options={(tabDbListCache[tab.id] || []).map((d) => ({ label: d, value: d }))}
-              />
-              <Select
-                size="small"
-                style={{ minWidth: 120 }}
-                placeholder="Schema"
-                value={t.schema || undefined}
-                allowClear
-                disabled={!t.database}
-                onDropdownVisibleChange={(open) => { if (open && t.database) fetchSchemasForTab(tab.id, t.database, t.dsId || ''); }}
-                onChange={(sch) => updateTab(tab.id, { schema: sch } as any)}
-                options={(tabSchemaListCache[tab.id] || []).map((s) => ({ label: s, value: s }))}
-              />
-            </>);
-            }
-            return (
+        {/* Row 1: Connection selectors + Script info */}
+        <div style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {/* Data source */}
             <Select
               size="small"
-              style={{ minWidth: 140 }}
-              placeholder={tabDbType === 'oracle' ? 'User' : 'Database'}
-              value={t.schema || t.database || undefined}
-              allowClear
-              onDropdownVisibleChange={(open) => { if (open && !tabSchemaListCache[tab.id]) fetchDatabasesForTab(tab.id, t.dsId || ''); }}
-              onChange={(val) => updateTab(tab.id, { schema: val, database: undefined } as any)}
-              options={(tabSchemaListCache[tab.id] || []).map((s) => ({ label: s, value: s }))}
+              style={{ minWidth: 180 }}
+              placeholder={tr('query.selectDS')}
+              value={t.dsId  || undefined}
+              onChange={(v) => {
+                updateTab(tab.id, { dsId: v, database: undefined, schema: undefined } as any);
+                setTabDbListCache(prev => { const n = {...prev}; delete n[tab.id]; return n; });
+                setTabSchemaListCache(prev => { const n = {...prev}; delete n[tab.id]; return n; });
+              }}
+              options={dataSources.map((ds) => ({ label: `${ds.name} (${ds.type})`, value: ds.id }))}
             />
-            );
-          })()}
-          <Button size="small" type="primary" icon={<PlayCircleOutlined />}
-            loading={tab.loading} onClick={() => loadSQLTab(tab.id)}>
-            {tr('query.run')}
-          </Button>
-          <Button size="small" icon={<StopOutlined />} disabled={!tab.loading}>{tr('query.stop')}</Button>
-          {tab.result && tab.result.total_rows > 0 && (
-            <Button size="small" icon={<ExportOutlined />}
-              onClick={() => openExportModal({ sql: (tab as SqlTab).sql })}>
-              {tr('query.exportResult')}
-            </Button>
-          )}
+            {/* Database / Schema selectors — per tab type */}
+            {(() => {
+              const tabDs = dataSources.find(ds => ds.id === (t.dsId ));
+              const tabDbType = tabDs?.type || dbType;
+              if (tabDbType === 'postgres' || tabDbType === 'sqlserver') {
+              return (<>
+                <Select
+                  size="small"
+                  style={{ minWidth: 120 }}
+                  placeholder="Database"
+                  value={t.database || undefined}
+                  allowClear
+                  onDropdownVisibleChange={(open) => { if (open && !tabDbListCache[tab.id]) fetchDatabasesForTab(tab.id, t.dsId || ''); }}
+                  onChange={(db) => {
+                    updateTab(tab.id, { database: db, schema: undefined } as any);
+                    if (db) fetchSchemasForTab(tab.id, db, t.dsId || '');
+                  }}
+                  options={(tabDbListCache[tab.id] || []).map((d) => ({ label: d, value: d }))}
+                />
+                <Select
+                  size="small"
+                  style={{ minWidth: 120 }}
+                  placeholder="Schema"
+                  value={t.schema || undefined}
+                  allowClear
+                  disabled={!t.database}
+                  onDropdownVisibleChange={(open) => { if (open && t.database) fetchSchemasForTab(tab.id, t.database, t.dsId || ''); }}
+                  onChange={(sch) => updateTab(tab.id, { schema: sch } as any)}
+                  options={(tabSchemaListCache[tab.id] || []).map((s) => ({ label: s, value: s }))}
+                />
+              </>);
+              }
+              return (
+              <Select
+                size="small"
+                style={{ minWidth: 140 }}
+                placeholder={tabDbType === 'oracle' ? 'User' : 'Database'}
+                value={t.schema || t.database || undefined}
+                allowClear
+                onDropdownVisibleChange={(open) => { if (open && !tabSchemaListCache[tab.id]) fetchDatabasesForTab(tab.id, t.dsId || ''); }}
+                onChange={(val) => updateTab(tab.id, { schema: val, database: undefined } as any)}
+                options={(tabSchemaListCache[tab.id] || []).map((s) => ({ label: s, value: s }))}
+              />
+              );
+            })()}
+          </div>
+          {/* Script info — right aligned */}
+          <Space size={8}>
+            {t.scriptName && (
+              <Space size={4}>
+                <FileTextOutlined style={{ color: '#20a53a', fontSize: 13 }} />
+                <Typography.Text style={{ fontSize: 12 }}>{t.scriptName}</Typography.Text>
+                <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                  ({t.scriptSaveStatus === 'saving' ? tr('query.saving') : t.scriptSaveStatus === 'saved' ? tr('query.saved') : t.scriptSaveStatus === 'error' ? tr('query.saveFailed') : tr('query.noChanges')})
+                </Typography.Text>
+              </Space>
+            )}
+            <Button size="small" icon={<FileTextOutlined />} onClick={openScriptModal}>{tr('query.loadScript')}</Button>
+          </Space>
         </div>
+
+        {/* Row 2: SQL Editor */}
         <div style={{ resize: 'vertical', overflow: 'auto', height: 120, minHeight: 60, maxHeight: 400, border: '1px solid #d9d9d9', borderRadius: 4, marginBottom: 8 }}>
           <Editor
             height="100%" defaultLanguage="sql" value={t.sql}
@@ -1630,6 +1687,23 @@ const SQLEditor: React.FC = () => {
             options={{ minimap: { enabled: false }, fontSize: 14, wordWrap: 'on', scrollBeyondLastLine: false }}
           />
         </div>
+
+        {/* Row 3: Action buttons */}
+        <div style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' }}>
+          <Button size="small" type="primary" icon={<PlayCircleOutlined />}
+            loading={tab.loading} onClick={() => loadSQLTab(tab.id)}>
+            {tr('query.run')}
+          </Button>
+          <Button size="small" icon={<StopOutlined />} disabled={!tab.loading}>{tr('query.stop')}</Button>
+          {tab.result && (
+            <Button size="small" icon={<ExportOutlined />} style={{ marginLeft: 'auto' }} onClick={() => {
+              const st = tab as SqlTab;
+              openExportModal({ sql: st.sql, schema: st.schema || undefined, database: st.database || undefined });
+            }}>{tr('query.exportTable')}</Button>
+          )}
+        </div>
+
+        {/* Row 4: Table result */}
         <div style={{ flex: 1, overflow: 'auto' }}>
           {renderTableResult(tab, (p, s) => {
             const t = tab as SqlTab;
@@ -2083,6 +2157,65 @@ const SQLEditor: React.FC = () => {
             onChange={(e) => setDeleteConfirmName(e.target.value)}
           />
         </div>
+      </Modal>
+
+      {/* Script selection modal */}
+      <Modal 
+        title={tr('query.loadScript')} 
+        open={scriptModalOpen} 
+        onCancel={() => setScriptModalOpen(false)} 
+        footer={null} 
+        width={600} 
+        destroyOnHidden
+      >
+        <div style={{ marginBottom: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+          <Space size={4} style={{ flex: 1 }}>
+            <Typography.Link onClick={() => loadScriptDir('')} style={{ fontSize: 13 }}>{tr('query.rootDir')}</Typography.Link>
+            {scriptDir && scriptDir.split('/').map((part, idx, arr) => (
+              <React.Fragment key={part}>
+                <Typography.Text type="secondary">/</Typography.Text>
+                <Typography.Link onClick={() => loadScriptDir(arr.slice(0, idx + 1).join('/'))} style={{ fontSize: 13 }}>{part}</Typography.Link>
+              </React.Fragment>
+            ))}
+          </Space>
+          <Input 
+            placeholder={tr('query.searchScript')} 
+            prefix={<SearchOutlined />} 
+            allowClear
+            value={scriptKeyword} 
+            onChange={(e) => setScriptKeyword(e.target.value)} 
+            style={{ width: 180 }} 
+          />
+        </div>
+        <Spin spinning={scriptLoading}>
+          {scriptDirs.length === 0 && scriptFiles.filter(f => !scriptKeyword || f.name.toLowerCase().includes(scriptKeyword.toLowerCase())).length === 0 ? (
+            <Empty description={tr('query.noScripts')} />
+          ) : (
+            <List size="small"
+              dataSource={[
+                ...scriptDirs.map(d => ({ ...d, _isDir: true })),
+                ...scriptFiles.filter(f => !scriptKeyword || f.name.toLowerCase().includes(scriptKeyword.toLowerCase())).map(f => ({ ...f, _isDir: false })),
+              ]}
+              renderItem={(item) => {
+                if (item._isDir) {
+                  return (
+                    <List.Item style={{ cursor: 'pointer' }} onClick={() => loadScriptDir(item.path)}>
+                      <List.Item.Meta avatar={<FolderOutlined style={{ fontSize: 18, color: '#faad14', marginTop: 4 }} />}
+                        title={item.name} />
+                    </List.Item>
+                  );
+                }
+                return (
+                  <List.Item style={{ cursor: 'pointer' }} onClick={() => loadScript(item as ScriptFileInfo)}
+                    actions={[<Typography.Text type="secondary" key="time" style={{ fontSize: 11 }}>{item.mod_time?.slice(0, 16) || ''}</Typography.Text>]}>
+                    <List.Item.Meta avatar={<FileTextOutlined style={{ fontSize: 18, color: '#20a53a', marginTop: 4 }} />}
+                      title={item.name}
+                      description={<Typography.Text type="secondary" style={{ fontSize: 12 }}>{item.path}</Typography.Text>} />
+                  </List.Item>
+                );
+              }} />
+          )}
+        </Spin>
       </Modal>
     </div>
   );
